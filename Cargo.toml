@@ -1,0 +1,23 @@
+[package]
+name = "pocketjs-embassy"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+pocket-runtime = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+pocket-drivers = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+
+pocket-raster = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+embassy-executor = { version = "0.10", features = ["platform-std", "executor-thread"] }
+embassy-time = { version = "0.5", features = ["std", "generic-queue-8"] }
+static_cell = "2"
+
+[build-dependencies]
+cc = "1.2"
+
+[profile.release]
+panic = "abort"

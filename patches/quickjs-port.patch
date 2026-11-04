@@ -1,0 +1,119 @@
+diff --git a/quickjs.c b/quickjs.c
+index 04886e3..dd58596 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -7625,7 +7625,8 @@ static int find_line_num(JSContext *ctx, JSFunctionBytecode *b,
+                          uint32_t pc_value, int *col)
+ {
+     const uint8_t *p_end, *p;
+-    int new_line_num, new_col_num, line_num, col_num, pc, v, ret;
++    int new_line_num, new_col_num, line_num, col_num, pc, ret;
++    int32_t v;
+     unsigned int op;
+ 
+     *col = 1;
+@@ -41769,7 +41770,7 @@ static int js_typed_array_get_length_unsafe(JSContext *ctx, JSValueConst obj)
+ 
+ static JSValue js_typed_array___speciesCreate(JSContext *ctx,
+                                               JSValueConst this_val,
+-                                              int argc, JSValueConst *argv);
++                                              int argc, JSValueConst *argv, bool writable);
+ 
+ static JSValue js_array_every(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv, int special)
+@@ -41823,7 +41824,7 @@ static JSValue js_array_every(JSContext *ctx, JSValueConst this_val,
+     case special_map | special_TA:
+         args[0] = obj;
+         args[1] = js_int32(len);
+-        ret = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 2, args);
++        ret = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 2, args, true);
+         if (JS_IsException(ret))
+             goto exception;
+         break;
+@@ -41900,7 +41901,7 @@ done:
+         JSValue arr;
+         args[0] = obj;
+         args[1] = js_int32(n);
+-        arr = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 2, args);
++        arr = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 2, args, true);
+         if (JS_IsException(arr))
+             goto exception;
+         args[0] = ret;
+@@ -44682,7 +44683,8 @@ static JSValue js_parseInt(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv)
+ {
+     const char *str, *p;
+-    int radix, flags;
++    int flags;
++    int32_t radix;
+     JSValue ret;
+ 
+     str = JS_ToCString(ctx, argv[0]);
+@@ -53320,7 +53322,7 @@ static __exception int remainingElementsCount_add(JSContext *ctx,
+                                                   int addend)
+ {
+     JSValue val;
+-    int remainingElementsCount;
++    int32_t remainingElementsCount;
+ 
+     val = JS_GetPropertyUint32(ctx, resolve_element_env, 0);
+     if (JS_IsException(val))
+@@ -53351,7 +53353,8 @@ static JSValue js_promise_all_resolve_element(JSContext *ctx,
+     JSValueConst resolve = func_data[3];
+     JSValueConst resolve_element_env = func_data[4];
+     JSValue ret, obj;
+-    int is_zero, index;
++    int is_zero;
++    int32_t index;
+ 
+     if (JS_ToInt32(ctx, &index, func_data[1]))
+         return JS_EXCEPTION;
+@@ -57309,7 +57312,7 @@ static JSValue js_typed_array_create(JSContext *ctx, JSValueConst ctor,
+ 
+ static JSValue js_typed_array___speciesCreate(JSContext *ctx,
+                                               JSValueConst this_val,
+-                                              int argc, JSValueConst *argv)
++                                              int argc, JSValueConst *argv, bool writable)
+ {
+     JSValueConst obj;
+     JSObject *p;
+@@ -57331,6 +57334,11 @@ static JSValue js_typed_array___speciesCreate(JSContext *ctx,
+         ret = js_typed_array_create(ctx, ctor, argc1, argv + 1);
+         JS_FreeValue(ctx, ctor);
+     }
++    if (writable && !JS_IsException(ret) &&
++        typed_array_is_immutable(JS_VALUE_GET_OBJ(ret))) {
++        JS_FreeValue(ctx, ret);
++        return JS_ThrowTypeErrorImmutableArrayBuffer(ctx);
++    }
+     return ret;
+ }
+ 
+@@ -58032,6 +58040,9 @@ static JSValue js_typed_array_reverse(JSContext *ctx, JSValueConst this_val,
+     len = js_typed_array_get_length_unsafe(ctx, this_val);
+     if (len < 0)
+         return JS_EXCEPTION;
++    if (typed_array_is_immutable(JS_VALUE_GET_OBJ(this_val))) {
++        return JS_ThrowTypeErrorImmutableArrayBuffer(ctx);
++    }
+     if (len > 0) {
+         p = JS_VALUE_GET_OBJ(this_val);
+         switch (typed_array_size_log2(p->class_id)) {
+@@ -58131,7 +58142,7 @@ static JSValue js_typed_array_slice(JSContext *ctx, JSValueConst this_val,
+ 
+     args[0] = this_val;
+     args[1] = js_int32(count);
+-    arr = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 2, args);
++    arr = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 2, args, true);
+     if (JS_IsException(arr))
+         goto exception;
+ 
+@@ -58219,7 +58230,7 @@ static JSValue js_typed_array_subarray(JSContext *ctx, JSValueConst this_val,
+     // result is length-tracking if source TA is and no explicit count is given
+     if (ta->track_rab && JS_IsUndefined(argv[1]))
+         args[3] = JS_UNDEFINED;
+-    arr = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 4, args);
++    arr = js_typed_array___speciesCreate(ctx, JS_UNDEFINED, 4, args, false);
+     JS_FreeValue(ctx, ta_buffer);
+     return arr;
+  exception:

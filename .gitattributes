@@ -1,0 +1,2 @@
+# Preserve significant empty context lines in upstream patches.
+patches/*.patch -whitespace
