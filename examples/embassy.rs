@@ -1,6 +1,6 @@
 use embassy_executor::{Executor, Spawner};
 use embassy_time::{Duration, Ticker, Timer};
-use pocketjs_embassy::JsUi;
+use pocketjs_embassy::{JsUi, state::Model};
 use static_cell::StaticCell;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -18,11 +18,17 @@ async fn heartbeat() {
 async fn ui_probe() {
     let mut ui = JsUi::new().unwrap();
     let mut ticker = Ticker::every(Duration::from_micros(16_667));
-    for value in 0..60 {
-        ui.evaluate(format!("setKeyCount({value})").as_bytes())
+    let mut state = Model {
+        link: "Connected",
+        usb: "Ready",
+        ..Model::default()
+    };
+    for value in 0..60u8 {
+        state.layer = value % 10;
+        state.presses = value;
+        ui.frame(state.clone(), u64::from(value) * 16_667, false)
             .unwrap();
-        ui.frame().unwrap();
-        assert!(ui.contains_text(&value.to_string()));
+        assert!(ui.contains_text(&format!("{:02}", value % 10)));
         ticker.next().await;
     }
     let beats = HEARTBEATS.load(Ordering::Relaxed);

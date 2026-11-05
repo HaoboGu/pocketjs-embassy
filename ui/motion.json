@@ -1,0 +1,86 @@
+{
+  "keyframes": {
+    "enter": {
+      "from": {
+        "opacity": 0,
+        "transform": "translateY(10px)"
+      },
+      "to": {
+        "opacity": 1,
+        "transform": "translateY(0px)"
+      }
+    },
+    "breathe": {
+      "0%,100%": {
+        "opacity": 0.45,
+        "transform": "scale(0.9)"
+      },
+      "50%": {
+        "opacity": 1,
+        "transform": "scale(1.2)"
+      }
+    },
+    "charge": {
+      "0%,100%": {
+        "transform": "translateX(0px)",
+        "opacity": 0.25
+      },
+      "50%": {
+        "transform": "translateX(142px)",
+        "opacity": 0.75
+      }
+    },
+    "meter-a": {
+      "0%,100%": {
+        "transform": "scaleY(0.25)"
+      },
+      "35%": {
+        "transform": "scaleY(1)"
+      },
+      "70%": {
+        "transform": "scaleY(0.45)"
+      }
+    },
+    "meter-b": {
+      "0%,100%": {
+        "transform": "scaleY(0.7)"
+      },
+      "35%": {
+        "transform": "scaleY(0.3)"
+      },
+      "70%": {
+        "transform": "scaleY(1)"
+      }
+    },
+    "meter-c": {
+      "0%,100%": {
+        "transform": "scaleY(0.45)"
+      },
+      "35%": {
+        "transform": "scaleY(0.8)"
+      },
+      "70%": {
+        "transform": "scaleY(0.2)"
+      }
+    },
+    "battery-pulse": {
+      "0%,100%": {
+        "opacity": 0.55
+      },
+      "50%": {
+        "opacity": 1
+      }
+    }
+  },
+  "animation": {
+    "enter": "enter 400ms ease-out both",
+    "enter-late": "enter 480ms ease-out 120ms both",
+    "enter-badge": "enter 400ms ease-out 60ms both",
+    "breathe": "breathe 1800ms ease-in-out infinite",
+    "charge": "charge 2400ms ease-in-out infinite",
+    "meter-a": "meter-a 900ms ease-in-out infinite",
+    "meter-b": "meter-b 900ms ease-in-out infinite",
+    "meter-c": "meter-c 900ms ease-in-out infinite",
+    "battery-pulse": "battery-pulse 1800ms ease-in-out infinite"
+  }
+}

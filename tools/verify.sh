@@ -10,6 +10,12 @@ cargo run --release --locked --example preview
 python3 tools/preview.py
 (
     cd firmware/esp32s31
-    cargo build --release --locked
-    cargo clippy --release --locked -- -D warnings
+    for protocol in rynk vial; do
+        cargo build --release --locked --no-default-features --features "$protocol"
+        cargo clippy --release --locked --no-default-features --features "$protocol" -- -D warnings
+        artifact="../../target/artifacts/$protocol"
+        mkdir -p "$artifact"
+        cp target/riscv32imafc-unknown-none-elf/release/rmk-mosaico-quickjs "$artifact/rmk-mosaico-quickjs.elf"
+        python3 ../../tools/memory.py "$artifact/rmk-mosaico-quickjs.elf" > "$artifact/memory.json"
+    done
 )

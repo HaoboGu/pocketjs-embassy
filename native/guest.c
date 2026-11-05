@@ -6,6 +6,7 @@ struct experiment_guest {
     JSContext *context;
     pocket_guest_quickjs *binding;
     unsigned remaining;
+    char bridge_error[256];
 };
 
 static int interrupt(JSRuntime *runtime, void *opaque) {
@@ -36,10 +37,13 @@ void *experiment_guest_binding(void *opaque) {
     return ((struct experiment_guest *)opaque)->binding;
 }
 void experiment_guest_budget(void *opaque, unsigned polls) {
-    ((struct experiment_guest *)opaque)->remaining = polls;
+    struct experiment_guest *guest = opaque;
+    guest->remaining = polls;
+    guest->bridge_error[0] = 0;
 }
 const char *experiment_guest_error(void *opaque) {
-    return pocket_guest_quickjs_error(((struct experiment_guest *)opaque)->binding);
+    struct experiment_guest *guest = opaque;
+    return guest->bridge_error[0] ? guest->bridge_error : pocket_guest_quickjs_error(guest->binding);
 }
 void experiment_guest_destroy(void *opaque) {
     struct experiment_guest *guest = opaque;
@@ -62,6 +66,14 @@ int _gettimeofday(struct timeval *value, void *timezone) {
 #endif
 
 #ifdef POCKET_EMBEDDED
+#undef malloc
+#undef calloc
+#undef realloc
+#undef free
+extern void *malloc(size_t);
+extern void *calloc(size_t, size_t);
+extern void *realloc(void *, size_t);
+extern void free(void *);
 #include <errno.h>
 #include <reent.h>
 #include <sys/types.h>
@@ -93,14 +105,43 @@ ssize_t _write(int descriptor, const void *bytes, size_t length) {
 }
 #endif
 
-#ifdef POCKET_EMBEDDED
-/* Keep plain and reentrant newlib allocation on the same Rust heap. */
-#undef malloc
-#undef calloc
-#undef realloc
-#undef free
-void *malloc(size_t size) { return pocket_c_malloc(size); }
-void *calloc(size_t count, size_t size) { return pocket_c_calloc(count, size); }
-void *realloc(void *pointer, size_t size) { return pocket_c_realloc(pointer, size); }
-void free(void *pointer) { pocket_c_free(pointer); }
-#endif
+
+static int bridge_failure(struct experiment_guest *guest) {
+    JSContext *ctx = guest->context;
+    JSValue error = JS_GetException(ctx);
+    const char *message = JS_ToCString(ctx, error);
+    snprintf(guest->bridge_error, sizeof guest->bridge_error, "%s", message ? message : "state bridge failed");
+    if (message) JS_FreeCString(ctx, message);
+    JS_FreeValue(ctx, error);
+    return -1;
+}
+int experiment_guest_input(void *opaque, const char *json, size_t length, uint64_t now_us) {
+    struct experiment_guest *guest = opaque;
+    JSContext *ctx = guest->context;
+    JSValue global = JS_GetGlobalObject(ctx);
+    if (JS_SetPropertyStr(ctx, global, "__rmkTime", JS_NewFloat64(ctx, (double)now_us / 1000)) < 0)
+        goto failed;
+    if (json) {
+        JSValue value = JS_ParseJSON(ctx, json, length, "rmk-state");
+        if (JS_IsException(value)) goto failed;
+        if (JS_SetPropertyStr(ctx, global, "__rmkPending", value) < 0) goto failed;
+    }
+    JS_FreeValue(ctx, global);
+    return 0;
+failed:
+    JS_FreeValue(ctx, global);
+    return bridge_failure(guest);
+}
+int experiment_guest_animating(void *opaque) {
+    JSContext *ctx = ((struct experiment_guest *)opaque)->context;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue value = JS_GetPropertyStr(ctx, global, "__rmkAnimating");
+    if (JS_IsException(value)) {
+        JS_FreeValue(ctx, global);
+        return bridge_failure(opaque);
+    }
+    int active = JS_ToBool(ctx, value);
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, global);
+    return active;
+}

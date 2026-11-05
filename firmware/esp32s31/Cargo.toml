@@ -1,43 +1,67 @@
 [package]
-name = "pocketjs-embassy-s31"
+name = "rmk-mosaico-quickjs"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-publish = false
 
-[workspace]
+[features]
+default = ["vial"]
+vial = ["rmk/vial"]
+rynk = ["rmk/rynk"]
 
 [[bin]]
-name = "pocketjs-embassy-s31"
+name = "rmk-mosaico-quickjs"
 test = false
 bench = false
 
 [dependencies]
 pocketjs-embassy = { path = "../.." }
+rmk = { path = "../../.deps/rmk/rmk", default-features = false, features = [
+    "esp32s31_ble",
+    "log",
+    "storage",
+    "dongle",
+    "split",
+    "display",
+] }
 embassy-executor = "0.10"
-embassy-time = "0.5"
-embassy-futures = "0.1"
-static_cell = "2"
-embedded-graphics = "0.8"
-log = "0.4"
-esp-alloc = { version = "0.11", default-features = false }
+esp-alloc = { version = "0.11", default-features = false, features = ["compat"] }
 esp-backtrace = { version = "0.20", features = ["esp32s31", "panic-handler", "println"] }
 esp-bootloader-esp-idf = { version = "0.6", features = ["esp32s31", "log-04"] }
 esp-hal = { version = "=1.2.0", features = ["esp32s31", "unstable"] }
 esp-println = { version = "0.18", default-features = false, features = ["esp32s31", "log-04", "uart"] }
-esp-rtos = { version = "0.4", features = ["esp32s31", "embassy", "esp-alloc"] }
+esp-radio = { version = "1.0.0-beta.2", features = ["esp32s31", "unstable", "ble"] }
+esp-rtos = { version = "0.4", features = ["esp32s31", "esp-radio", "embassy"] }
+esp-storage = { version = "0.10", features = ["embedded-storage", "esp32s31"] }
+bt-hci = "0.11"
+static_cell = "2"
+embassy-time = "0.5"
+embassy-futures = "0.1"
+embassy-sync = "0.8"
+embassy-usb = "0.6"
+embedded-graphics = "0.8"
+heapless = "0.9"
+log = "0.4"
 
+[profile.dev]
+opt-level = "s"
+
+[profile.dev.package.esp-storage]
+opt-level = 3
+
+# Includes S31 BLE, MPLL/PSRAM calibration, and USB HS RX FIFO sizing fixes.
 [patch.crates-io]
 esp-hal = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-alloc = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-backtrace = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-bootloader-esp-idf = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-println = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-radio = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-rtos = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-storage = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 
 [profile.release]
 codegen-units = 1
+debug = 2
 lto = "thin"
 opt-level = 3
-debug = 2
-panic = "abort"

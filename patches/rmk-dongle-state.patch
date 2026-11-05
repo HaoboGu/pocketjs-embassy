@@ -1,0 +1,126 @@
+diff --git a/rmk/src/event/dongle.rs b/rmk/src/event/dongle.rs
+index 5bdffc597..aaac65f75 100644
+--- a/rmk/src/event/dongle.rs
++++ b/rmk/src/event/dongle.rs
+@@ -1,4 +1,6 @@
+-use rmk_macro::event;
++use embassy_sync::watch::{Receiver, Sender, Watch};
++
++use crate::event::{AsyncPublishableEvent, PublishableEvent, SubscribableEvent};
+ 
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+@@ -12,9 +14,94 @@ pub enum DongleState {
+     Connected,
+ }
+ 
+-#[event(channel_size = crate::DONGLE_STATE_EVENT_CHANNEL_SIZE, pubs = crate::DONGLE_STATE_EVENT_PUB_SIZE, subs = crate::DONGLE_STATE_EVENT_SUB_SIZE)]
++/// Latest dongle link state, retained for displays that subscribe after startup.
++/// Intermediate changes coalesce while a subscriber is busy.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+ pub struct DongleStateEvent(pub DongleState);
+ 
+ impl_payload_wrapper!(DongleStateEvent, DongleState);
++
++// Unit tests exercise retained delivery even when firmware defaults have no display.
++const SUBSCRIBERS: usize = if cfg!(test) && crate::DONGLE_STATE_EVENT_SUB_SIZE == 0 {
++    1
++} else {
++    crate::DONGLE_STATE_EVENT_SUB_SIZE
++};
++
++static DONGLE_STATE: Watch<crate::RawMutex, DongleStateEvent, SUBSCRIBERS> = Watch::new();
++
++impl PublishableEvent for DongleStateEvent {
++    type Publisher = Sender<'static, crate::RawMutex, Self, SUBSCRIBERS>;
++    const PUBLISH_IS_NOOP: bool = SUBSCRIBERS == 0;
++
++    fn publisher() -> Self::Publisher {
++        DONGLE_STATE.sender()
++    }
++}
++
++impl AsyncPublishableEvent for DongleStateEvent {
++    type AsyncPublisher = Self::Publisher;
++
++    fn publisher_async() -> Result<Self::AsyncPublisher, embassy_sync::pubsub::Error> {
++        Ok(DONGLE_STATE.sender())
++    }
++}
++
++impl SubscribableEvent for DongleStateEvent {
++    type Subscriber = Receiver<'static, crate::RawMutex, Self, SUBSCRIBERS>;
++
++    fn subscriber() -> Self::Subscriber {
++        DONGLE_STATE
++            .receiver()
++            .expect("DongleStateEvent subscriber limit exceeded; increase [event.dongle_state].subs")
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use futures::FutureExt;
++
++    use super::{DongleState, DongleStateEvent};
++    use crate::event::{EventSubscriber, SubscribableEvent, publish_event, publish_event_async};
++
++    #[test]
++    fn late_display_subscriber_observes_current_link_and_future_changes() {
++        publish_event(DongleStateEvent(DongleState::Pairing));
++        publish_event(DongleStateEvent(DongleState::Connected));
++        let mut display = DongleStateEvent::subscriber();
++        assert_eq!(
++            display.next_event().now_or_never(),
++            Some(DongleStateEvent(DongleState::Connected)),
++            "a display starting after BLE connects must receive the current state"
++        );
++        assert_eq!(display.next_event().now_or_never(), None);
++
++        publish_event(DongleStateEvent(DongleState::Searching));
++        assert_eq!(
++            display.next_event().now_or_never(),
++            Some(DongleStateEvent(DongleState::Searching))
++        );
++        assert_eq!(
++            publish_event_async(DongleStateEvent(DongleState::Connected)).now_or_never(),
++            Some(())
++        );
++        assert_eq!(
++            display.next_event().now_or_never(),
++            Some(DongleStateEvent(DongleState::Connected))
++        );
++        drop(display);
++        let mut restarted_display = DongleStateEvent::subscriber();
++        assert_eq!(
++            restarted_display.next_event().now_or_never(),
++            Some(DongleStateEvent(DongleState::Connected)),
++            "consuming a state must not erase it for a later display"
++        );
++        publish_event(DongleStateEvent(DongleState::Searching));
++        publish_event(DongleStateEvent(DongleState::Pairing));
++        assert_eq!(
++            restarted_display.next_event().now_or_never(),
++            Some(DongleStateEvent(DongleState::Pairing))
++        );
++    }
++}
+diff --git a/rmk/src/event/mod.rs b/rmk/src/event/mod.rs
+index cb80d23d3..868911d1a 100644
+--- a/rmk/src/event/mod.rs
++++ b/rmk/src/event/mod.rs
+@@ -177,6 +177,13 @@ impl<'a, M: RawMutex, T: Clone, const N: usize> EventPublisher for watch::Sender
+     }
+ }
+ 
++impl<'a, M: RawMutex, T: Clone, const N: usize> AsyncEventPublisher for watch::Sender<'a, M, T, N> {
++    type Event = T;
++    async fn publish_async(&self, message: T) {
++        self.send(message);
++    }
++}
++
+ impl<'a, M: RawMutex, T: Clone, const N: usize> EventSubscriber for watch::Receiver<'a, M, T, N> {
+     type Event = T;
+     // WARNING: it won't work when using `XEvent::subscriber().next_event().await`,

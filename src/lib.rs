@@ -2,6 +2,7 @@
 
 extern crate alloc;
 mod c_alloc;
+pub mod state;
 
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use core::{
@@ -9,11 +10,14 @@ use core::{
     ptr::NonNull,
 };
 use pocket_drivers::abi::{PocketGuestV1, PocketResult, PocketRuntime};
+use pocket_render::damage::{DamagePlan, DamageTarget, DamageTracker};
 use pocket_runtime::{
     Cow, Guest, GuestEnvironment, GuestFrame, InputClasses, Profile, RuntimeConfig, RuntimeError,
     abi::{self, CGuest, Handle},
 };
+use state::Model;
 
+pub const JS_STACK_LIMIT: usize = 128 * 1024;
 pub const WIDTH: usize = 480;
 pub const HEIGHT: usize = 480;
 const JAVASCRIPT: &[u8] = include_bytes!("../ui/generated/app.js");
@@ -25,12 +29,20 @@ unsafe extern "C" {
     fn experiment_guest_budget(guest: *mut c_void, polls: u32);
     fn experiment_guest_error(guest: *mut c_void) -> *const c_char;
     fn experiment_guest_destroy(guest: *mut c_void);
+    fn experiment_guest_input(
+        guest: *mut c_void,
+        json: *const c_char,
+        length: usize,
+        now_us: u64,
+    ) -> i32;
+    fn experiment_guest_animating(guest: *mut c_void) -> i32;
     fn pocket_guest_quickjs_vtable() -> *const PocketGuestV1;
 }
 
 #[derive(Debug)]
 pub enum Error {
     Allocation,
+    Serialization(serde_json::Error),
     Runtime(RuntimeError),
     JavaScript(String),
 }
@@ -46,12 +58,18 @@ pub struct JsUi {
     guest: CGuest,
     engine: NonNull<c_void>,
     pixels: Vec<u16>,
+    model: Option<Model>,
+    clock_tick: u64,
+    last_us: u64,
+    animating: bool,
+    damage: DamageTracker<8>,
 }
 impl JsUi {
     pub fn new() -> Result<Self, Error> {
         let handle = Handle::new(runtime_config())?;
-        let engine = NonNull::new(unsafe { experiment_guest_create(4 * 1024 * 1024, 128 * 1024) })
-            .ok_or(Error::Allocation)?;
+        let engine =
+            NonNull::new(unsafe { experiment_guest_create(4 * 1024 * 1024, JS_STACK_LIMIT) })
+                .ok_or(Error::Allocation)?;
         let guest = match unsafe {
             CGuest::new(
                 pocket_guest_quickjs_vtable(),
@@ -70,12 +88,19 @@ impl JsUi {
             guest,
             engine,
             pixels: vec![0; WIDTH * HEIGHT],
+            model: None,
+            clock_tick: 0,
+            last_us: 0,
+            animating: true,
+            damage: DamageTracker::new(),
         };
         let context = ui.handle.op_context();
         context
             .core_mut()?
             .ui
             .set_viewport(WIDTH as f32, HEIGHT as f32);
+        context.core_mut()?.ui.set_stable_motion_paint(true);
+        assert!(context.core_mut()?.ui.set_tick_rate(60));
         let environment = GuestEnvironment {
             host: "mosaico-experiment",
             host_abi: pocket_drivers::spec::BINDING_GENERATION,
@@ -95,7 +120,6 @@ impl JsUi {
             return Err(ui.exception());
         }
         ui.evaluate(JAVASCRIPT)?;
-        ui.frame()?;
         Ok(ui)
     }
 
@@ -104,8 +128,44 @@ impl JsUi {
         self.guest.evaluate(source).map_err(|_| self.exception())
     }
 
-    pub fn frame(&mut self) -> Result<&[u16], Error> {
+    pub fn frame(
+        &mut self,
+        model: Model,
+        now_us: u64,
+        force: bool,
+    ) -> Result<Option<DamagePlan<8>>, Error> {
+        if now_us < self.last_us {
+            return Err(RuntimeError::InvalidArgument.into());
+        }
+        self.last_us = now_us;
+        let changed = self.model.as_ref() != Some(&model);
+        if !changed && !self.animating && !force {
+            return Ok(None);
+        }
+        let was_animating = self.model.is_some() && self.animating;
+        let target_tick = now_us.saturating_mul(60) / 1_000_000;
+        if !was_animating {
+            self.clock_tick = target_tick;
+        }
+        let ticks = target_tick - self.clock_tick;
+        let context = self.handle.op_context();
+        for _ in 1..ticks {
+            context.core_mut()?.ui.tick();
+        }
+        let json = if changed {
+            let mut bytes = serde_json::to_vec(&model).map_err(Error::Serialization)?;
+            bytes.push(0);
+            Some(bytes)
+        } else {
+            None
+        };
         unsafe { experiment_guest_budget(self.engine.as_ptr(), 32) };
+        let (pointer, length) = json.as_ref().map_or((core::ptr::null(), 0), |bytes| {
+            (bytes.as_ptr().cast(), bytes.len() - 1)
+        });
+        if unsafe { experiment_guest_input(self.engine.as_ptr(), pointer, length, now_us) } != 0 {
+            return Err(self.exception());
+        }
         let frame = GuestFrame {
             buttons: 0,
             analog: 0x8080,
@@ -120,17 +180,62 @@ impl JsUi {
         if self.guest.frame(&frame).is_err() {
             return Err(self.exception());
         }
-        let context = self.handle.op_context();
+        let active = unsafe { experiment_guest_animating(self.engine.as_ptr()) };
+        if active < 0 {
+            return Err(self.exception());
+        }
+        self.animating = active != 0;
+        self.model = Some(model);
+        self.clock_tick = target_tick;
         let mut state = context.core_mut()?;
-        state.ui.tick();
+        if ticks != 0 || !was_animating {
+            state.ui.tick();
+        }
         state.ui.draw();
+        let words = &state.ui.current_draw_list().words;
+        if force {
+            self.damage.invalidate();
+        }
+        let target = DamageTarget::new(WIDTH as u32, HEIGHT as u32, 1, 0);
+        let mut damage = self
+            .damage
+            .prepare_with_motion(&state.ui, words, target)
+            .map_err(|_| Error::Runtime(RuntimeError::InvalidState))?;
+        damage.repaint_motion();
+        pocket_raster::render_scaled_rgb565_regions(
+            &state.ui,
+            words,
+            &mut self.pixels,
+            1,
+            damage.regions(),
+        );
+        self.damage.commit(&state.ui, words, target);
+        Ok(if damage.regions().is_empty() {
+            None
+        } else {
+            Some(damage)
+        })
+    }
+
+    pub fn animating(&self) -> bool {
+        self.animating
+    }
+    pub fn pixels(&self) -> &[u16] {
+        &self.pixels
+    }
+
+    #[cfg(not(target_os = "none"))]
+    pub fn reference_pixels(&self) -> Vec<u16> {
+        let context = self.handle.op_context();
+        let state = context.core().expect("frame is not borrowed");
+        let mut pixels = vec![0; WIDTH * HEIGHT];
         pocket_raster::render_scaled_rgb565(
             &state.ui,
             &state.ui.current_draw_list().words,
-            &mut self.pixels,
+            &mut pixels,
             1,
         );
-        Ok(&self.pixels)
+        pixels
     }
 
     pub fn contains_text(&self, expected: &str) -> bool {
@@ -138,7 +243,14 @@ impl JsUi {
         let Ok(state) = context.core() else {
             return false;
         };
-        (0..256).any(|id| state.ui.node_text(id) == Some(expected))
+        let mut nodes = vec![pocket_drivers::spec::ROOT_ID];
+        while let Some(id) = nodes.pop() {
+            if state.ui.node_text(id) == Some(expected) {
+                return true;
+            }
+            nodes.extend_from_slice(state.ui.node_children(id));
+        }
+        false
     }
 
     fn exception(&self) -> Error {

@@ -31,6 +31,9 @@ fn main() {
         .file(root.join("native/guest.c"));
     if env::var("TARGET").unwrap() == "riscv32imafc-unknown-none-elf" {
         let toolchain = root.join(".deps/riscv32-esp-elf/bin");
+        for function in ["printf", "vprintf", "sprintf", "snprintf", "vsnprintf"] {
+            build.define(function, format!("pocket_libc_{function}").as_str());
+        }
         build
             .compiler(toolchain.join("riscv32-esp-elf-gcc"))
             .archiver(toolchain.join("riscv32-esp-elf-ar"))
@@ -62,6 +65,12 @@ fn main() {
                     .status()
                     .expect("remove duplicate C startup object");
                 assert!(status.success());
+                // The radio supplies its own formatter; keep newlib formatting private to QuickJS.
+                let mut rename = Command::new(toolchain.join("riscv32-esp-elf-objcopy"));
+                for function in ["printf", "vprintf", "sprintf", "snprintf", "vsnprintf"] {
+                    rename.arg(format!("--redefine-sym={function}=pocket_libc_{function}"));
+                }
+                assert!(rename.arg(&archive).status().unwrap().success());
             }
         }
     }

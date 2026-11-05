@@ -1,0 +1,19 @@
+# Relayed keyboard events consumed by the status screen.
+[event.modifier]
+channel_size = 32
+subs = 3
+
+[event.action]
+channel_size = 64
+subs = 1
+
+[event.connection_status_change]
+subs = 2
+[event.layer_change]
+subs = 2
+[event.peripheral_battery]
+subs = 3
+[event.battery_status]
+subs = 1
+[event.dongle_state]
+subs = 1

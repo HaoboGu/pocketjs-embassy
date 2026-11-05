@@ -2,5 +2,9 @@
 target = "riscv32imafc-unknown-none-elf"
 rustflags = ["-C", "force-frame-pointers"]
 
+[target.riscv32imafc-unknown-none-elf]
+runner = "bash run.sh"
+
 [env]
 ESP_LOG = "info"
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }

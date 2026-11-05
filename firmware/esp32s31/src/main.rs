@@ -1,62 +1,50 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
+mod allocation;
 mod board;
+mod display;
+mod runtime_support;
+mod usb_boot;
 
-use alloc::format;
+#[cfg(all(feature = "vial", feature = "rynk"))]
+compile_error!("select either vial or rynk");
+#[cfg(not(any(feature = "vial", feature = "rynk")))]
+compile_error!("select either vial or rynk");
+
+use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Instant, Ticker, Timer};
-use embedded_graphics::{
-    prelude::{Point, Size},
-    primitives::Rectangle,
-};
 use esp_backtrace as _;
-use esp_hal::{clock::CpuClock, system::Stack, timer::timg::TimerGroup};
-use pocketjs_embassy::{HEIGHT, JsUi, WIDTH};
+use esp_hal::clock::CpuClock;
+use esp_hal::system::Stack;
+use esp_hal::timer::timg::TimerGroup;
+use esp_hal::usb::otg::Usb;
+use esp_hal::usb::otg::embassy_usb_device::{Config, Driver};
+use esp_radio::ble::controller::BleConnector;
+use esp_storage::FlashStorage;
+use rmk::config::{DeviceConfig, StorageConfig};
+use rmk::dongle::{Dongle, DongleRouter};
+use rmk::processor::Processor;
+use rmk::run_all;
+use rmk::storage::{async_flash_wrapper, new_storage_without_keymap};
+use rmk::usb::UsbTransport;
 use static_cell::{ConstStaticCell, StaticCell};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-#[global_allocator]
-static GUI_HEAP: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
-
-#[unsafe(no_mangle)]
-extern "C" fn pocket_uptime_us() -> u64 {
-    Instant::now().as_micros()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn pocket_uart_write(bytes: *const u8, length: usize) {
-    // Newlib keeps this output buffer readable until the synchronous write returns.
-    esp_println::Printer::write_bytes(unsafe { core::slice::from_raw_parts(bytes, length) });
-}
-
 #[embassy_executor::task]
-async fn ui_task(peripherals: board::DisplayPeripherals) {
-    let Some(mut panel) = board::init(peripherals).await else {
-        return;
-    };
-    let mut ui = JsUi::new().expect("initialize Solid/QuickJS");
-    let mut ticker = Ticker::every(Duration::from_micros(16_667));
-    let area = Rectangle::new(Point::zero(), Size::new(WIDTH as u32, HEIGHT as u32));
-    let mut previous = u64::MAX;
-    loop {
-        let count = Instant::now().as_secs() % 10;
-        if count != previous {
-            ui.evaluate(format!("setKeyCount({count})").as_bytes())
-                .unwrap();
-            let started = Instant::now();
-            let pixels = ui.frame().unwrap();
-            panel.present_rgb565(pixels, area).await.unwrap();
-            log::info!(
-                "QuickJS count={} render+present={}us",
-                count,
-                started.elapsed().as_micros()
-            );
-            previous = count;
+async fn display_task(peripherals: board::DisplayPeripherals) {
+    // Queue keyboard status while the panel and JS guest initialize.
+    let mut events = display::DongleDisplay::subscriber();
+    if let Some(panel) = board::init(peripherals).await {
+        log::info!(
+            "PocketJS QuickJS GUI on core {}",
+            esp_hal::system::Cpu::current() as usize
+        );
+        match display::DongleDisplay::new(panel) {
+            Ok(mut display) => display.run_with_events(&mut events).await,
+            Err(error) => log::error!("QuickJS initialization failed: {error:?}"),
         }
-        ticker.next().await;
     }
 }
 
@@ -64,21 +52,34 @@ async fn ui_task(peripherals: board::DisplayPeripherals) {
 async fn main(_spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
-    let psram = esp_hal::psram::Psram::new(p.PSRAM, Default::default());
-    let (start, size) = psram.raw_parts();
-    let framebuffer = WIDTH * HEIGHT * 2;
-    assert!(size > framebuffer);
-    // The panel owns the prefix; Rust and QuickJS allocate from the remaining PSRAM.
-    unsafe {
-        GUI_HEAP.add_region(esp_alloc::HeapRegion::new(
-            start.add(framebuffer),
-            size - framebuffer,
-            esp_alloc::MemoryCapability::External.into(),
-        ));
-    }
-    esp_alloc::heap_allocator!(size: 32 * 1024);
-    esp_rtos::start(TimerGroup::new(p.TIMG0).timer0);
-    let display = board::DisplayPeripherals {
+    let psram = {
+        let psram = esp_hal::psram::Psram::new(p.PSRAM, Default::default());
+        let (start, size) = psram.raw_parts();
+        let framebuffer_bytes = board::SCREEN_W * board::SCREEN_H * 2;
+        assert!(size > framebuffer_bytes);
+        log::info!(
+            "PSRAM={} bytes; GUI heap={} bytes",
+            size,
+            size - framebuffer_bytes
+        );
+        // Keep the GUI heap separate from the radio controller's C allocator.
+        // SAFETY: the panel owns the first framebuffer; this nonoverlapping tail lives for the firmware lifetime.
+        unsafe {
+            allocation::GUI_HEAP.add_region(esp_alloc::HeapRegion::new(
+                start.add(framebuffer_bytes),
+                size - framebuffer_bytes,
+                esp_alloc::MemoryCapability::External.into(),
+            ));
+        }
+        psram
+    };
+    // The pinned S31 linker exposes 64 KiB of boot RAM after startup.
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 16 * 1024);
+    let timg0 = TimerGroup::new(p.TIMG0);
+    esp_rtos::start(timg0.timer0);
+
+    let display_peripherals = board::DisplayPeripherals {
         spi2: p.SPI2,
         dma: p.DMA_AXI_CH0,
         psram,
@@ -91,17 +92,63 @@ async fn main(_spawner: Spawner) {
         data3: p.GPIO9,
         cs: p.GPIO50,
     };
-    static STACK: ConstStaticCell<Stack<{ 192 * 1024 }>> = ConstStaticCell::new(Stack::new());
-    static EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
-    esp_rtos::start_second_core(p.CPU_CTRL, STACK.take(), move || {
-        EXECUTOR
-            .init(esp_rtos::embassy::Executor::new())
-            .run(|spawner| {
-                spawner.spawn(ui_task(display).unwrap());
-            });
+
+    let connector = BleConnector::new(p.BT, Default::default()).unwrap();
+    let controller: ExternalController<_, 64> = ExternalController::new(connector);
+    log::info!(
+        "BLE initialized: internal heap free={} bytes",
+        esp_alloc::HEAP.free()
+    );
+    let mut address: [u8; 6] = esp_hal::efuse::base_mac_address()
+        .as_bytes()
+        .try_into()
+        .unwrap();
+    address.reverse();
+    address[5] |= 0xc0;
+
+    static EP_OUT_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
+    let usb = Usb::new_hs(p.USB_HS);
+    let driver = Driver::new(usb, EP_OUT_BUFFER.init([0; 1024]), Config::default());
+
+    let device_config = DeviceConfig {
+        vid: 0x4c4b,
+        pid: 0x4644,
+        manufacturer: "RMK",
+        product_name: "RMK Mosaico Dongle",
+        ..Default::default()
+    };
+    let storage_config = StorageConfig {
+        start_addr: 0xff0000,
+        num_sectors: 16,
+        ..Default::default()
+    };
+    let flash = async_flash_wrapper(FlashStorage::new(p.FLASH).multicore_auto_park());
+    let mut storage = new_storage_without_keymap(flash, storage_config).await;
+
+    let router = DongleRouter::new();
+    let mut dongle = Dongle::new(controller, address, &router);
+    static BOOT_HANDLER: StaticCell<usb_boot::BootloaderHandler> = StaticCell::new();
+    let mut builder = UsbTransport::builder(driver, device_config);
+    builder
+        .usb_builder()
+        .handler(BOOT_HANDLER.init(usb_boot::BootloaderHandler));
+    let mut usb = builder.build().with_dongle_router(&router);
+    // Keep display rendering and SPI wakeups independent of the USB/BLE executor.
+    const DISPLAY_STACK_SIZE: usize = pocketjs_embassy::JS_STACK_LIMIT + 64 * 1024;
+    static DISPLAY_STACK: ConstStaticCell<Stack<DISPLAY_STACK_SIZE>> =
+        ConstStaticCell::new(Stack::new());
+    static DISPLAY_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+    esp_rtos::start_second_core(p.CPU_CTRL, DISPLAY_STACK.take(), move || {
+        let executor = DISPLAY_EXECUTOR.init(esp_rtos::embassy::Executor::new());
+        executor.run(|spawner| {
+            spawner.spawn(display_task(display_peripherals).unwrap());
+        });
     });
-    loop {
-        Timer::after_secs(1).await;
-        log::info!("Embassy core 0 heartbeat");
-    }
+    let boot_task = async {
+        usb_boot::REQUESTED.wait().await;
+        // Let the control transfer finish before disconnecting the running USB device.
+        embassy_time::Timer::after_millis(100).await;
+        rmk::boot::jump_to_bootloader();
+    };
+    embassy_futures::join::join(async { run_all!(usb, dongle, storage).await }, boot_task).await;
 }

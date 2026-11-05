@@ -16,6 +16,13 @@ if git -C .deps/quickjs apply --reverse --check "$repo_root/patches/quickjs-port
 else
     git -C .deps/quickjs apply "$repo_root/patches/quickjs-port.patch"
 fi
+if [[ ! -d .deps/rmk/.git ]]; then
+    git clone --filter=blob:none --no-checkout https://github.com/rmk-rs/rmk .deps/rmk
+fi
+git -C .deps/rmk checkout e9f242b40856b857b25f160949f8c31283f35441
+if ! git -C .deps/rmk apply --reverse --check "$repo_root/patches/rmk-dongle-state.patch" 2>/dev/null; then
+    git -C .deps/rmk apply "$repo_root/patches/rmk-dongle-state.patch"
+fi
 bun install --cwd .deps/pocketjs --frozen-lockfile --ignore-scripts
 if [[ "${1:-}" == "--s31" ]]; then
     rustup target add riscv32imafc-unknown-none-elf

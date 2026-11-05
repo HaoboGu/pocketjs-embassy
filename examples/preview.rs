@@ -1,18 +1,28 @@
-use pocketjs_embassy::{HEIGHT, JsUi, WIDTH};
+use pocketjs_embassy::{HEIGHT, JsUi, WIDTH, state::Model};
 use std::{fs::File, io::Write};
-
 fn main() {
-    let mut ui = JsUi::new().expect("boot Solid UI in QuickJS");
-    assert!(ui.contains_text("0"));
-    ui.evaluate(b"setKeyCount(7)").expect("update Solid signal");
-    let pixels = ui.frame().expect("draw JS update").to_vec();
-    assert!(ui.contains_text("7"));
+    let mut ui = JsUi::new().unwrap();
+    let mut state = Model {
+        link: "Connected",
+        usb: "Ready",
+        layer: 2,
+        battery_left: 85,
+        battery_right: 72,
+        modifiers: 0x02,
+        ..Model::default()
+    };
+    for (slot, label) in state.key_labels.iter_mut().zip(["A", "S", "D", "Enter"]) {
+        slot.push_str(label).unwrap();
+    }
+    ui.frame(state.clone(), 0, false).unwrap();
+    ui.frame(state, 700_000, false).unwrap();
+    assert!(ui.contains_text("Connected") && ui.contains_text("02"));
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "target/preview.ppm".into());
     let mut output = File::create(&path).unwrap();
     write!(output, "P6\n{WIDTH} {HEIGHT}\n255\n").unwrap();
-    for pixel in pixels {
+    for &pixel in ui.pixels() {
         output
             .write_all(&[
                 (((pixel >> 11) & 31) * 255 / 31) as u8,
@@ -21,5 +31,5 @@ fn main() {
             ])
             .unwrap();
     }
-    println!("PASS: Solid signal 0 -> 7, rendered {WIDTH}x{HEIGHT}: {path}");
+    println!("PASS: RMK Mosaico state rendered through Solid/QuickJS: {path}");
 }

@@ -11,6 +11,11 @@ pocket-drivers = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc
 
 pocket-raster = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
 
+pocket-render = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+heapless = { version = "0.9", features = ["serde"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
 [target.'cfg(not(target_os = "none"))'.dev-dependencies]
 embassy-executor = { version = "0.10", features = ["platform-std", "executor-thread"] }
 embassy-time = { version = "0.5", features = ["std", "generic-queue-8"] }
