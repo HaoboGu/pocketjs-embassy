@@ -5,6 +5,9 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 
+[features]
+frame-profile = []
+
 [dependencies]
 pocket-runtime = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
 pocket-drivers = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }

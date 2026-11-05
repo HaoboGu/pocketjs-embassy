@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+(
+    cd .deps/pocketjs
+    bun test --conditions=browser tests/compiler-portability.test.ts tests/renderer.test.ts
+    bunx --no-install tsc --noEmit
+)
 cargo fmt --check
 cargo fmt --manifest-path firmware/esp32s31/Cargo.toml --check
 cargo test --release --locked

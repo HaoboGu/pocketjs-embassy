@@ -1,0 +1,13 @@
+diff --git a/framework/src/styles.ts b/framework/src/styles.ts
+index c445c63b..6a993f30 100644
+--- a/framework/src/styles.ts
++++ b/framework/src/styles.ts
+@@ -46,6 +46,8 @@ export function registerStyles(table: Record<string, number>): void {
+ /** styleId for a class string, or undefined if the compiler never saw it
+  *  (or the reordering is ambiguous between order-sensitive literals). */
+ export function resolveStyle(cls: string): number | undefined {
++  const exact = verbatim.get(cls);
++  if (exact !== undefined) return exact;
+   const norm = normalize(cls);
+   const hit = verbatim.get(norm);
+   if (hit !== undefined) return hit;

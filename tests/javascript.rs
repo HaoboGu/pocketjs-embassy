@@ -179,3 +179,56 @@ fn animation_status_errors_are_returned_to_the_owner() {
         _ => panic!("expected the status bridge error"),
     }
 }
+
+#[test]
+fn native_animation_frames_skip_js_until_state_or_deadline_changes() {
+    let mut ui = JsUi::new().unwrap();
+    ui.evaluate(b"globalThis.frameCalls=0;const originalFrame=globalThis.frame;globalThis.frame=(...args)=>{frameCalls++;return originalFrame(...args)}").unwrap();
+    let mut state = connected();
+    state.charging_left = true;
+    for time in [0, 100_000, 200_000] {
+        ui.frame(state.clone(), time, false).unwrap();
+    }
+    ui.evaluate(b"if(frameCalls!==1)throw Error('native animation called JS')")
+        .unwrap();
+    ui.frame(state.clone(), 700_000, false).unwrap();
+    ui.evaluate(b"if(frameCalls!==2)throw Error('missed settling deadline')")
+        .unwrap();
+    state.key_labels[0].push_str("A").unwrap();
+    state.presses = 1;
+    ui.frame(state.clone(), 800_000, false).unwrap();
+    ui.frame(state.clone(), 810_000, false).unwrap();
+    assert!(ui.contains_text("A"));
+    ui.evaluate(b"if(frameCalls!==3)throw Error('state update did not run once')")
+        .unwrap();
+    state.key_labels[0].clear();
+    ui.frame(state.clone(), 820_000, false).unwrap();
+    ui.frame(state, 1_300_001, false).unwrap();
+    assert!(ui.contains_text("Ready"));
+    ui.evaluate(b"if(frameCalls!==5)throw Error('missed typing deadline')")
+        .unwrap();
+}
+
+#[test]
+fn generic_frame_callbacks_run_without_keyboard_schedule_globals() {
+    let mut ui = JsUi::new().unwrap();
+    ui.evaluate(b"delete globalThis.__rmkAnimating;delete globalThis.__rmkNextFrame;globalThis.frameCalls=0;globalThis.frame=()=>{frameCalls++}").unwrap();
+    for time in [0, 20_000, 40_000] {
+        ui.frame(connected(), time, false).unwrap();
+    }
+    ui.evaluate(b"if(frameCalls!==3)throw Error('generic frame stopped')")
+        .unwrap();
+}
+
+#[test]
+fn framework_work_keeps_an_idle_application_running() {
+    let mut ui = JsUi::new().unwrap();
+    ui.evaluate(b"globalThis.__rmkAnimating=false;globalThis.__rmkNextFrame=Infinity;Object.defineProperty(globalThis,'__pocketNeedsFrame',{value:true,writable:true,configurable:true});globalThis.frameCalls=0;globalThis.frame=()=>{frameCalls++}").unwrap();
+    for time in [0, 20_000, 40_000] {
+        ui.frame(connected(), time, false).unwrap();
+    }
+    ui.evaluate(b"if(frameCalls!==3)throw Error('framework work stopped');globalThis.__pocketNeedsFrame=false").unwrap();
+    ui.frame(connected(), 60_000, false).unwrap();
+    assert!(!ui.animating());
+    assert!(ui.frame(connected(), 80_000, false).unwrap().is_none());
+}

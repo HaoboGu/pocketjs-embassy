@@ -8,6 +8,7 @@ license = "GPL-3.0-or-later"
 default = ["vial"]
 vial = ["rmk/vial"]
 rynk = ["rmk/rynk"]
+usb-diagnostics = ["esp-backtrace/custom-pre-backtrace", "pocketjs-embassy/frame-profile"]
 
 [[bin]]
 name = "rmk-mosaico-quickjs"

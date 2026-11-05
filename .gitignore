@@ -1,3 +1,5 @@
 /target/
 /.deps
 /firmware/esp32s31/target/
+
+__pycache__/

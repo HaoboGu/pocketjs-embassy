@@ -23,20 +23,67 @@ pub const HEIGHT: usize = 480;
 const JAVASCRIPT: &[u8] = include_bytes!("../ui/generated/app.js");
 const ASSETS: &[u8] = include_bytes!("../ui/generated/app.pak");
 
+#[repr(C)]
+struct NativeString {
+    data: *const u8,
+    length: usize,
+}
+impl From<&str> for NativeString {
+    fn from(value: &str) -> Self {
+        Self {
+            data: value.as_ptr(),
+            length: value.len(),
+        }
+    }
+}
+#[repr(C)]
+struct NativeModel {
+    link: NativeString,
+    usb: NativeString,
+    keys: [NativeString; 6],
+    layer: u32,
+    modifiers: u32,
+    presses: u32,
+    battery_left: i32,
+    battery_right: i32,
+    charging: u32,
+}
+
 unsafe extern "C" {
     fn experiment_guest_create(heap_limit: usize, stack_limit: usize) -> *mut c_void;
     fn experiment_guest_binding(guest: *mut c_void) -> *mut c_void;
     fn experiment_guest_budget(guest: *mut c_void, polls: u32);
     fn experiment_guest_error(guest: *mut c_void) -> *const c_char;
     fn experiment_guest_destroy(guest: *mut c_void);
-    fn experiment_guest_input(
-        guest: *mut c_void,
-        json: *const c_char,
-        length: usize,
-        now_us: u64,
-    ) -> i32;
-    fn experiment_guest_animating(guest: *mut c_void) -> i32;
+    fn experiment_guest_input(guest: *mut c_void, state: *const NativeModel, now_us: u64) -> i32;
+    fn experiment_guest_animating(guest: *mut c_void, next_frame_us: *mut u64) -> i32;
     fn pocket_guest_quickjs_vtable() -> *const PocketGuestV1;
+}
+
+#[inline(always)]
+fn profile_frame(phase: u32) {
+    #[cfg(all(feature = "frame-profile", target_os = "none"))]
+    unsafe {
+        unsafe extern "C" {
+            fn pocket_frame_phase(phase: u32);
+        }
+        pocket_frame_phase(phase);
+    }
+    #[cfg(not(all(feature = "frame-profile", target_os = "none")))]
+    let _ = phase;
+}
+
+#[inline(always)]
+fn profile_detail(phase: u32) {
+    #[cfg(all(feature = "frame-profile", target_os = "none"))]
+    unsafe {
+        unsafe extern "C" {
+            fn pocket_bridge_phase(phase: u32);
+        }
+        pocket_bridge_phase(phase);
+    }
+    #[cfg(not(all(feature = "frame-profile", target_os = "none")))]
+    let _ = phase;
 }
 
 #[derive(Debug)]
@@ -62,6 +109,7 @@ pub struct JsUi {
     clock_tick: u64,
     last_us: u64,
     animating: bool,
+    next_js_us: u64,
     damage: DamageTracker<8>,
 }
 impl JsUi {
@@ -92,6 +140,7 @@ impl JsUi {
             clock_tick: 0,
             last_us: 0,
             animating: true,
+            next_js_us: 0,
             damage: DamageTracker::new(),
         };
         let context = ui.handle.op_context();
@@ -125,7 +174,10 @@ impl JsUi {
 
     pub fn evaluate(&mut self, source: &[u8]) -> Result<(), Error> {
         unsafe { experiment_guest_budget(self.engine.as_ptr(), 256) };
-        self.guest.evaluate(source).map_err(|_| self.exception())
+        self.guest.evaluate(source).map_err(|_| self.exception())?;
+        self.animating = true;
+        self.next_js_us = 0;
+        Ok(())
     }
 
     pub fn frame(
@@ -142,6 +194,7 @@ impl JsUi {
         if !changed && !self.animating && !force {
             return Ok(None);
         }
+        profile_frame(0);
         let was_animating = self.model.is_some() && self.animating;
         let target_tick = now_us.saturating_mul(60) / 1_000_000;
         if !was_animating {
@@ -152,41 +205,59 @@ impl JsUi {
         for _ in 1..ticks {
             context.core_mut()?.ui.tick();
         }
-        let json = if changed {
-            let mut bytes = serde_json::to_vec(&model).map_err(Error::Serialization)?;
-            bytes.push(0);
-            Some(bytes)
-        } else {
-            None
-        };
-        unsafe { experiment_guest_budget(self.engine.as_ptr(), 32) };
-        let (pointer, length) = json.as_ref().map_or((core::ptr::null(), 0), |bytes| {
-            (bytes.as_ptr().cast(), bytes.len() - 1)
-        });
-        if unsafe { experiment_guest_input(self.engine.as_ptr(), pointer, length, now_us) } != 0 {
-            return Err(self.exception());
+        profile_frame(1);
+        if changed || force || now_us >= self.next_js_us {
+            profile_detail(0);
+            let input = changed.then(|| NativeModel {
+                link: model.link.into(),
+                usb: model.usb.into(),
+                keys: model
+                    .key_labels
+                    .each_ref()
+                    .map(|label| label.as_str().into()),
+                layer: model.layer.into(),
+                modifiers: model.modifiers.into(),
+                presses: model.presses.into(),
+                battery_left: model.battery_left,
+                battery_right: model.battery_right,
+                charging: u32::from(model.charging_left) | (u32::from(model.charging_right) << 1),
+            });
+            unsafe { experiment_guest_budget(self.engine.as_ptr(), 32) };
+            let pointer = input
+                .as_ref()
+                .map_or(core::ptr::null(), core::ptr::from_ref);
+            profile_detail(1);
+            // All borrowed strings are copied into JS values during this call.
+            if unsafe { experiment_guest_input(self.engine.as_ptr(), pointer, now_us) } != 0 {
+                return Err(self.exception());
+            }
+            profile_detail(2);
+            let frame = GuestFrame {
+                buttons: 0,
+                analog: 0x8080,
+                touches: &[],
+                hits: &[],
+                touch_surfaces: &[],
+                right_analog: 0x8080,
+                axis_deltas: &[],
+                motion: None,
+                text: &[],
+            };
+            if self.guest.frame(&frame).is_err() {
+                return Err(self.exception());
+            }
+            profile_detail(3);
+            let active =
+                unsafe { experiment_guest_animating(self.engine.as_ptr(), &mut self.next_js_us) };
+            if active < 0 {
+                return Err(self.exception());
+            }
+            self.animating = active != 0;
+            profile_detail(4);
         }
-        let frame = GuestFrame {
-            buttons: 0,
-            analog: 0x8080,
-            touches: &[],
-            hits: &[],
-            touch_surfaces: &[],
-            right_analog: 0x8080,
-            axis_deltas: &[],
-            motion: None,
-            text: &[],
-        };
-        if self.guest.frame(&frame).is_err() {
-            return Err(self.exception());
-        }
-        let active = unsafe { experiment_guest_animating(self.engine.as_ptr()) };
-        if active < 0 {
-            return Err(self.exception());
-        }
-        self.animating = active != 0;
         self.model = Some(model);
         self.clock_tick = target_tick;
+        profile_frame(2);
         let mut state = context.core_mut()?;
         if ticks != 0 || !was_animating {
             state.ui.tick();
@@ -196,12 +267,14 @@ impl JsUi {
         if force {
             self.damage.invalidate();
         }
+        profile_frame(3);
         let target = DamageTarget::new(WIDTH as u32, HEIGHT as u32, 1, 0);
         let mut damage = self
             .damage
             .prepare_with_motion(&state.ui, words, target)
             .map_err(|_| Error::Runtime(RuntimeError::InvalidState))?;
         damage.repaint_motion();
+        profile_frame(4);
         pocket_raster::render_scaled_rgb565_regions(
             &state.ui,
             words,
@@ -209,7 +282,9 @@ impl JsUi {
             1,
             damage.regions(),
         );
+        profile_frame(5);
         self.damage.commit(&state.ui, words, target);
+        profile_frame(6);
         Ok(if damage.regions().is_empty() {
             None
         } else {

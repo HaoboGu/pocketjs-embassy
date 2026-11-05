@@ -3,6 +3,8 @@
 
 mod allocation;
 mod board;
+#[cfg(feature = "usb-diagnostics")]
+mod diagnostics;
 mod display;
 mod runtime_support;
 mod usb_boot;
@@ -24,7 +26,6 @@ use esp_radio::ble::controller::BleConnector;
 use esp_storage::FlashStorage;
 use rmk::config::{DeviceConfig, StorageConfig};
 use rmk::dongle::{Dongle, DongleRouter};
-use rmk::processor::Processor;
 use rmk::run_all;
 use rmk::storage::{async_flash_wrapper, new_storage_without_keymap};
 use rmk::usb::UsbTransport;
@@ -34,23 +35,32 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 #[embassy_executor::task]
 async fn display_task(peripherals: board::DisplayPeripherals) {
-    // Queue keyboard status while the panel and JS guest initialize.
-    let mut events = display::DongleDisplay::subscriber();
+    #[cfg(feature = "usb-diagnostics")]
+    diagnostics::STAGE.store(1, core::sync::atomic::Ordering::Relaxed);
     if let Some(panel) = board::init(peripherals).await {
+        #[cfg(feature = "usb-diagnostics")]
+        diagnostics::STAGE.store(2, core::sync::atomic::Ordering::Relaxed);
         log::info!(
             "PocketJS QuickJS GUI on core {}",
             esp_hal::system::Cpu::current() as usize
         );
-        match display::DongleDisplay::new(panel) {
-            Ok(mut display) => display.run_with_events(&mut events).await,
-            Err(error) => log::error!("QuickJS initialization failed: {error:?}"),
+        #[cfg(feature = "usb-diagnostics")]
+        diagnostics::benchmark_memory();
+        if let Err(error) = display::run(panel).await {
+            log::error!("QuickJS initialization failed: {error:?}");
         }
     }
 }
 
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
+    #[cfg(not(feature = "usb-diagnostics"))]
     esp_println::logger::init_logger_from_env();
+    #[cfg(feature = "usb-diagnostics")]
+    {
+        log::set_logger(&diagnostics::LOGGER).unwrap();
+        log::set_max_level(log::LevelFilter::Info);
+    }
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     let psram = {
         let psram = esp_hal::psram::Psram::new(p.PSRAM, Default::default());
@@ -144,11 +154,16 @@ async fn main(_spawner: Spawner) {
             spawner.spawn(display_task(display_peripherals).unwrap());
         });
     });
+    let mut display_state = display::StateCollector::default();
     let boot_task = async {
         usb_boot::REQUESTED.wait().await;
         // Let the control transfer finish before disconnecting the running USB device.
         embassy_time::Timer::after_millis(100).await;
         rmk::boot::jump_to_bootloader();
     };
-    embassy_futures::join::join(async { run_all!(usb, dongle, storage).await }, boot_task).await;
+    embassy_futures::join::join(
+        async { run_all!(usb, dongle, storage, display_state).await },
+        boot_task,
+    )
+    .await;
 }

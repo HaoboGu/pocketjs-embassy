@@ -37,8 +37,16 @@ fn main() {
         build
             .compiler(toolchain.join("riscv32-esp-elf-gcc"))
             .archiver(toolchain.join("riscv32-esp-elf-ar"))
+            .opt_level_str("s")
             .flag("-mabi=ilp32f")
             .define("POCKET_EMBEDDED", None);
+        println!("cargo:rerun-if-env-changed=POCKETJS_QJS_IRAM");
+        if env::var("POCKETJS_QJS_IRAM").as_deref() != Ok("0") {
+            build.define("POCKET_QJS_IRAM", None);
+        }
+        if env::var_os("CARGO_FEATURE_FRAME_PROFILE").is_some() {
+            build.define("POCKET_FRAME_PROFILE", None);
+        }
         for library in ["libc.a", "libgcc.a"] {
             let output = Command::new(toolchain.join("riscv32-esp-elf-gcc"))
                 .args([

@@ -6,5 +6,7 @@ rustflags = ["-C", "force-frame-pointers"]
 runner = "bash run.sh"
 
 [env]
+ESP_ALLOC_CONFIG_HEAP_ALGORITHM = "TLSF"
+ESP_ALLOC_CONFIG_MAX_REGIONS = "2"
 ESP_LOG = "info"
 KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }

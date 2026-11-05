@@ -1,8 +1,10 @@
-//! Fold relayed keyboard events into a snapshot and repaint it between event bursts.
+//! Collect receiver state on Core 0; render the latest snapshot on Core 1.
 
 mod ui;
 
 use embassy_futures::select::{Either, select};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Watch};
+use embassy_time::Instant;
 use rmk::core_traits::Runnable;
 use rmk::event::{
     ActionEvent, BatteryStatusEvent, ConnectionStatusChangeEvent, DongleState, DongleStateEvent,
@@ -33,12 +35,13 @@ pub struct Snapshot {
     /// Wrapping press tally, including modifiers, used to detect typing activity.
     pub presses: u8,
     pub layer: u8,
+    pub revision: u32,
+    pub changed_at_us: u64,
 }
 
-/// Own the panel and yield during its transfers so transports can run.
-///
-/// Subscriptions are polled in order, so connection and modifier updates apply before
-/// key actions and status events.
+static LATEST: Watch<CriticalSectionRawMutex, Snapshot, 1> = Watch::new();
+
+/// Keep event consumption independent of synchronous JS and drawing.
 #[processor(subscribe = [
     ConnectionStatusChangeEvent,
     ModifierEvent,
@@ -49,23 +52,12 @@ pub struct Snapshot {
     LayerChangeEvent,
 ])]
 #[runnable_generated]
-pub struct DongleDisplay {
-    panel: Panel,
-    ui: Ui,
+#[derive(Default)]
+pub struct StateCollector {
     state: Snapshot,
 }
 
-type Event = <DongleDisplay as Processor>::Event;
-
-impl DongleDisplay {
-    pub fn new(panel: Panel) -> Result<Self, pocketjs_embassy::Error> {
-        Ok(Self {
-            panel,
-            ui: Ui::new()?,
-            state: Snapshot::default(),
-        })
-    }
-
+impl StateCollector {
     async fn on_connection_status_change_event(&mut self, event: ConnectionStatusChangeEvent) {
         self.state.usb = event.0.usb;
     }
@@ -80,8 +72,12 @@ impl DongleDisplay {
         if pressed {
             self.state.presses = self.state.presses.wrapping_add(1);
         }
-        let Some(code) = hid_code(&event) else {
-            return;
+        let code = match event.action {
+            Action::Key(KeyCode::Hid(key)) if !key.is_modifier() => key as u8,
+            Action::KeyWithModifier(key, _) | Action::OneShotKey(key) if !key.is_modifier() => {
+                key as u8
+            }
+            _ => return,
         };
         let keys = &mut self.state.keys;
         if !pressed {
@@ -113,56 +109,57 @@ impl DongleDisplay {
     }
 }
 
-/// Extract a displayable HID usage; modifiers use their separate event.
-fn hid_code(event: &ActionEvent) -> Option<u8> {
-    match event.action {
-        Action::Key(KeyCode::Hid(key)) if !key.is_modifier() => Some(key as u8),
-        Action::KeyWithModifier(key, _) | Action::OneShotKey(key) if !key.is_modifier() => {
-            Some(key as u8)
-        }
-        _ => None,
-    }
-}
-
-/// Whether `event` would reverse a change made since `start` before it is painted.
-fn undoes(start: &Snapshot, now: &Snapshot, event: &Event) -> bool {
-    match event {
-        Event::Action(action) => hid_code(action).is_some_and(|code| {
-            let pressed = action.keyboard_event.pressed;
-            start.keys.contains(&code) == pressed && now.keys.contains(&code) != pressed
-        }),
-        Event::Modifier(event) => now.mods & !start.mods & !event.modifier.into_bits() != 0,
-        _ => false,
-    }
-}
-
-impl Runnable for DongleDisplay {
+impl Runnable for StateCollector {
     async fn run(&mut self) -> ! {
-        self.run_with_events(&mut Self::subscriber()).await
-    }
-}
-
-impl DongleDisplay {
-    pub async fn run_with_events(&mut self, events: &mut impl EventSubscriber<Event = Event>) -> ! {
+        let mut events = Self::subscriber();
+        let sender = LATEST.sender();
         self.state.usb = rmk::state::current_connection_status().usb;
-        // A reversing event starts the next paint after this state has been displayed.
-        let mut held = None;
+        sender.send(self.state);
         loop {
-            let start = self.state;
-            if held.is_none()
-                && let Either::Second(event) = select(self.ui.wait(), events.next_event()).await
-            {
-                held = Some(event);
-            }
-            // Coalesce queued updates until the first visible transition would disappear.
-            while let Some(event) = held.take().or_else(|| events.next_event().now_or_never()) {
-                if undoes(&start, &self.state, &event) {
-                    held = Some(event);
-                    break;
-                }
+            self.process(events.next_event().await).await;
+            while let Some(event) = events.next_event().now_or_never() {
                 self.process(event).await;
             }
-            self.ui.render(&self.state, &mut self.panel).await;
+            self.state.revision = self.state.revision.wrapping_add(1);
+            self.state.changed_at_us = Instant::now().as_micros();
+            #[cfg(feature = "usb-diagnostics")]
+            crate::diagnostics::INPUT_REVISION
+                .store(self.state.revision, core::sync::atomic::Ordering::Relaxed);
+            sender.send(self.state);
+        }
+    }
+}
+
+pub async fn run(mut panel: Panel) -> Result<(), pocketjs_embassy::Error> {
+    let mut receiver = LATEST.receiver().unwrap();
+    #[cfg(feature = "usb-diagnostics")]
+    {
+        let deadline = Instant::now() + embassy_time::Duration::from_secs(20);
+        let mut snapshot = receiver.get().await;
+        while !(matches!(snapshot.link, DongleState::Connected)
+            && snapshot.usb == UsbState::Configured)
+        {
+            match select(receiver.changed(), embassy_time::Timer::at(deadline)).await {
+                Either::First(next) => snapshot = next,
+                Either::Second(_) => break,
+            }
+        }
+        embassy_time::Timer::after_millis(1500).await;
+        log::info!(
+            "JS benchmark link={:?} usb={:?}",
+            snapshot.link,
+            snapshot.usb
+        );
+    }
+    let mut ui = Ui::new()?;
+    let mut state = receiver.get().await;
+    loop {
+        ui.render(&state, &mut panel).await;
+        if let Either::Second(next) = select(ui.wait(), receiver.changed()).await {
+            state = next;
+        }
+        if let Some(next) = receiver.try_changed() {
+            state = next;
         }
     }
 }
