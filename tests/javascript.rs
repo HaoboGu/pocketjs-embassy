@@ -251,3 +251,43 @@ fn native_animation_waits_for_a_tick_but_input_is_immediate() {
     ui.frame(model, 1_000_003, false).unwrap();
     assert!(ui.contains_text("Ready"));
 }
+
+#[test]
+fn reload_owns_assets_and_keeps_current_keyboard_state() {
+    let mut ui = JsUi::new().unwrap();
+    let mut model = connected();
+    model.layer = 2;
+    model.key_labels[0].push_str("Enter").unwrap();
+    ui.frame(model.clone(), 1_000_000, true).unwrap();
+    for n in 0..8 {
+        ui.reload(
+            include_bytes!("../ui/generated/app.js"),
+            include_bytes!("../ui/generated/app.pak").to_vec(),
+            2_000_000 + n * 1_000_000,
+        )
+        .unwrap();
+        assert!(ui.contains_text("Enter") && ui.contains_text("Connected"));
+        ui.frame(model.clone(), 2_700_000 + n * 1_000_000, false)
+            .unwrap();
+        assert_eq!(ui.pixels(), ui.reference_pixels());
+    }
+}
+
+#[test]
+fn failed_reload_preserves_the_live_scene() {
+    let mut ui = JsUi::new().unwrap();
+    let state = connected();
+    ui.frame(state.clone(), 1_000_000, true).unwrap();
+    ui.frame(state.clone(), 2_000_000, false).unwrap();
+    let before = ui.pixels().to_vec();
+    for script in [
+        b"let =".as_slice(),
+        b"globalThis.frame = () => { throw Error('first frame failed'); }",
+    ] {
+        assert!(ui.reload(script, Vec::new(), 3_000_000).is_err());
+        assert_eq!(ui.pixels(), before);
+        assert!(ui.contains_text("Connected"));
+    }
+    ui.frame(state, 4_000_000, false).unwrap();
+    assert_eq!(ui.pixels(), before);
+}

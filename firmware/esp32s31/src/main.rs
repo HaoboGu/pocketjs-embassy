@@ -10,6 +10,7 @@ mod board;
 #[cfg(feature = "usb-diagnostics")]
 mod diagnostics;
 mod display;
+mod reload;
 mod runtime_support;
 mod usb_boot;
 
@@ -120,9 +121,14 @@ async fn main(_spawner: Spawner) {
     address.reverse();
     address[5] |= 0xc0;
 
-    static EP_OUT_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
+    const USB_RX_BYTES: usize = if cfg!(feature = "rynk") { 1536 } else { 1024 };
+    static EP_OUT_BUFFER: StaticCell<[u8; USB_RX_BYTES]> = StaticCell::new();
     let usb = Usb::new_hs(p.USB_HS);
-    let driver = Driver::new(usb, EP_OUT_BUFFER.init([0; 1024]), Config::default());
+    let driver = Driver::new(
+        usb,
+        EP_OUT_BUFFER.init([0; USB_RX_BYTES]),
+        Config::default(),
+    );
 
     let device_config = DeviceConfig {
         vid: 0x4c4b,
@@ -146,6 +152,12 @@ async fn main(_spawner: Spawner) {
     builder
         .usb_builder()
         .handler(BOOT_HANDLER.init(usb_boot::BootloaderHandler));
+    let reload_endpoint = {
+        let mut function = builder.usb_builder().function(0xff, 0x4d, 1);
+        let mut interface = function.interface();
+        let mut alternate = interface.alt_setting(0xff, 0x4d, 1, None);
+        alternate.endpoint_bulk_out(None, reload::PACKET_SIZE as u16)
+    };
     let mut usb = builder.build().with_dongle_router(&router);
     // Keep display rendering and SPI wakeups independent of the USB/BLE executor.
     const DISPLAY_STACK_SIZE: usize = pocketjs_embassy::JS_STACK_LIMIT + 64 * 1024;
@@ -165,9 +177,10 @@ async fn main(_spawner: Spawner) {
         embassy_time::Timer::after_millis(100).await;
         rmk::boot::jump_to_bootloader();
     };
-    embassy_futures::join::join(
+    embassy_futures::join::join3(
         async { run_all!(usb, dongle, storage, display_state).await },
         boot_task,
+        reload::receive_bulk(reload_endpoint),
     )
     .await;
 }

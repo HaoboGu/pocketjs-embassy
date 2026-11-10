@@ -298,14 +298,29 @@ impl Ui {
             core::future::pending::<()>().await;
         }
     }
-    pub async fn render(&mut self, state: &Snapshot, panel: &mut Panel) {
+    pub fn reload(
+        &mut self,
+        bundle: pocketjs_embassy::reload::Bundle,
+    ) -> Result<(), pocketjs_embassy::Error> {
+        self.scene.reload(
+            &bundle.javascript,
+            bundle.assets,
+            Instant::now().as_micros(),
+        )?;
+        self.rendered = false;
+        self.retry = true;
+        self.failed = false;
+        self.defer_until = None;
+        Ok(())
+    }
+    pub async fn render(&mut self, state: &Snapshot, panel: &mut Panel) -> bool {
         if self.failed {
-            return;
+            return false;
         }
         let now = Instant::now();
         if !self.rendered && state.usb != UsbState::Configured && now.as_millis() < 3_000 {
             self.defer_until = Some(Instant::from_millis(3_000));
-            return;
+            return false;
         }
         self.defer_until = None;
         let batteries = state.batt.map(|battery| match battery {
@@ -387,7 +402,7 @@ impl Ui {
             Err(error) => {
                 log::error!("QuickJS display stopped: {error:?}");
                 self.failed = true;
-                return;
+                return false;
             }
         };
         let render_us = started.elapsed().as_micros();
@@ -445,5 +460,6 @@ impl Ui {
                 esp_alloc::HEAP.free()
             );
         }
+        !self.retry
     }
 }

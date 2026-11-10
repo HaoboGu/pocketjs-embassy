@@ -1,10 +1,12 @@
 """Convert the native preview's PPM output to PNG using the Python standard library."""
 from pathlib import Path
+import sys
 import struct
 import zlib
 
 root = Path(__file__).resolve().parent.parent
-magic, dimensions, maximum, rgb = (root / "target/preview.ppm").read_bytes().split(b"\n", 3)
+source = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "target/preview.ppm"
+magic, dimensions, maximum, rgb = source.read_bytes().split(b"\n", 3)
 assert magic == b"P6" and maximum == b"255"
 width, height = map(int, dimensions.split())
 assert len(rgb) == width * height * 3
@@ -17,6 +19,6 @@ for kind, data in (
 ):
     png += struct.pack(">I", len(data)) + kind + data
     png += struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
-path = root / "target/preview.png"
+path = source.with_suffix(".png")
 path.write_bytes(png)
 print(path)

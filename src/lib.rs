@@ -2,6 +2,7 @@
 
 extern crate alloc;
 mod c_alloc;
+pub mod reload;
 pub mod state;
 
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
@@ -112,6 +113,8 @@ pub struct JsUi {
     next_js_us: u64,
     damage: DamageTracker<8>,
     pending_frame: bool,
+    // QuickJS borrows the package until guest shutdown.
+    assets: Cow<'static, [u8]>,
 }
 #[repr(C, align(64))]
 #[derive(Clone)]
@@ -150,6 +153,22 @@ pub trait FrameRenderer {
 
 impl JsUi {
     pub fn new() -> Result<Self, Error> {
+        Self::create(JAVASCRIPT, Cow::Borrowed(ASSETS))
+    }
+
+    pub fn from_bundle(javascript: &[u8], assets: Vec<u8>) -> Result<Self, Error> {
+        Self::create(javascript, Cow::Owned(assets))
+    }
+
+    /// Keep the live scene until the replacement has initialized and rendered.
+    pub fn reload(&mut self, javascript: &[u8], assets: Vec<u8>, now_us: u64) -> Result<(), Error> {
+        let mut replacement = Self::from_bundle(javascript, assets)?;
+        replacement.frame(self.model.clone().unwrap_or_default(), now_us, true)?;
+        *self = replacement;
+        Ok(())
+    }
+
+    fn create(javascript: &[u8], assets: Cow<'static, [u8]>) -> Result<Self, Error> {
         let handle = Handle::new(runtime_config())?;
         let engine =
             NonNull::new(unsafe { experiment_guest_create(4 * 1024 * 1024, JS_STACK_LIMIT) })
@@ -179,6 +198,7 @@ impl JsUi {
             next_js_us: 0,
             damage: DamageTracker::new(),
             pending_frame: false,
+            assets,
         };
         let context = ui.handle.op_context();
         context
@@ -202,7 +222,7 @@ impl JsUi {
             auxiliary_root: -1,
             raster_density: 1,
             heap_limit: 4 * 1024 * 1024,
-            pak: ASSETS,
+            pak: &ui.assets,
             worker_javascript: &[],
             assets: None,
         };
@@ -210,7 +230,7 @@ impl JsUi {
         if ui.guest.initialize(context, &environment).is_err() {
             return Err(ui.exception());
         }
-        ui.evaluate(JAVASCRIPT)?;
+        ui.evaluate(javascript)?;
         Ok(ui)
     }
 

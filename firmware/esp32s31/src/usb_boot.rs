@@ -7,27 +7,52 @@ use embassy_usb::{
 pub static REQUESTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 pub struct BootloaderHandler;
 impl Handler for BootloaderHandler {
-    #[cfg(feature = "usb-diagnostics")]
     fn control_in<'a>(
         &'a mut self,
         request: Request,
         buffer: &'a mut [u8],
     ) -> Option<embassy_usb::control::InResponse<'a>> {
-        if request.request_type != RequestType::Vendor
-            || request.recipient != Recipient::Device
-            || request.request != 0x74
-            || !matches!(request.value, 0x4d53..=0x4d56 | 0x4d58..=0x4d5b)
+        if request.request_type == RequestType::Vendor
+            && request.recipient == Recipient::Device
+            && request.request == crate::reload::REQUEST
+            && request.value == crate::reload::MAGIC
         {
-            return None;
+            let limit = usize::from(request.length).min(buffer.len());
+            let len = crate::reload::read(request.index, &mut buffer[..limit]);
+            return Some(embassy_usb::control::InResponse::Accepted(&buffer[..len]));
         }
-        let limit = usize::from(request.length).min(buffer.len());
-        let length = crate::diagnostics::read(request.value, request.index, &mut buffer[..limit]);
-        Some(embassy_usb::control::InResponse::Accepted(
-            &buffer[..length],
-        ))
+        #[cfg(feature = "usb-diagnostics")]
+        {
+            if request.request_type != RequestType::Vendor
+                || request.recipient != Recipient::Device
+                || request.request != 0x74
+                || !matches!(request.value, 0x4d53..=0x4d56 | 0x4d58..=0x4d5b)
+            {
+                return None;
+            }
+            let limit = usize::from(request.length).min(buffer.len());
+            let length =
+                crate::diagnostics::read(request.value, request.index, &mut buffer[..limit]);
+            Some(embassy_usb::control::InResponse::Accepted(
+                &buffer[..length],
+            ))
+        }
+        #[cfg(not(feature = "usb-diagnostics"))]
+        None
     }
 
     fn control_out(&mut self, request: Request, data: &[u8]) -> Option<OutResponse> {
+        if request.request_type == RequestType::Vendor
+            && request.recipient == Recipient::Device
+            && request.request == crate::reload::REQUEST
+            && request.value == crate::reload::MAGIC
+        {
+            return Some(if crate::reload::queue(request.index, data) {
+                OutResponse::Accepted
+            } else {
+                OutResponse::Rejected
+            });
+        }
         if request.request_type == RequestType::Vendor
             && request.recipient == Recipient::Device
             && request.request == 0x71

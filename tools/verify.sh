@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
     bun test --conditions=browser tests/compiler-portability.test.ts tests/renderer.test.ts
     bunx --no-install tsc --noEmit
 )
+uv run --with 'pyusb>=1.3,<2' python -m unittest discover -s tools/tests
 cargo fmt --check
 cargo fmt --manifest-path firmware/esp32s31/Cargo.toml --check
 python3 tools/test-native.py

@@ -180,6 +180,85 @@ previous `-Os` C build for comparison. The S31 default is `-O2`. Inspect the ELF
 memory report before flashing a different compiler configuration.
 
 
+## Live UI development
+
+Upload any compatible prebuilt PocketJS bundle. The uploader accepts an artifact
+directory or a JSON manifest anywhere on your computer. It does not select a
+theme, invoke a build tool, or depend on the repository's UI source layout.
+
+```sh
+uv run tools/reload-ui.py /path/to/dist
+uv run tools/reload-ui.py /path/to/dist/dashboard.json
+uv run tools/reload-ui.py --bundle /path/to/dist
+```
+
+A directory contains `app.meta.json`, `app.js`, and `app.pak` by default. A manifest
+can select different artifact names relative to its own directory:
+
+```json
+{
+  "abi": 12,
+  "viewport": [480, 480],
+  "javascript": "dashboard.js",
+  "assets": "resources/dashboard.pak"
+}
+```
+
+`abi` must match the firmware's PocketJS binding generation. `viewport` describes
+the 480×480 Mosaico screen. `javascript` and `assets` are optional and default to
+`app.js` and `app.pak`; additional fields such as `name` or `layout` are ignored.
+Use matching JS and PAK files from the same build. PAK contains compiled styles,
+animations, fonts, and image assets. The optional `app.styles.ts` is not uploaded.
+
+```sh
+# Check file paths and metadata without opening a USB device.
+uv run tools/reload-ui.py /path/to/dist --check
+# Upload once, then watch for completed builds from your own build process.
+uv run tools/reload-ui.py /path/to/dist --watch
+```
+
+In watch mode, finish writing the JS and PAK files, then write or replace the
+manifest **last**. Its timestamp or replacement signals that a build is ready.
+Artifact changes alone do not trigger an upload; unchanged payloads are skipped.
+Changes published during an upload are picked up afterward. Incomplete or invalid
+builds are reported, and the watcher waits for the next manifest update.
+
+The included build script creates the two example bundles separately from upload:
+
+```sh
+bun tools/build-ui.ts --layout github --outdir target/ui/github
+uv run tools/reload-ui.py target/ui/github
+bun tools/build-ui.ts --layout paperline --outdir target/ui/paperline
+uv run tools/reload-ui.py target/ui/paperline
+```
+
+Other UI projects only need to produce this artifact contract; no uploader changes
+or theme registration are needed. `--status` reads the active bundle generation,
+CRC and uptime. `--serial` selects one receiver, and `--output` saves a JSON report.
+
+The loader replaces only the UI runtime. RMK, BLE, USB and pairing storage keep
+running. The replacement receives current keyboard state and must render its
+first frame before replacing the previous scene. A rejected upload or JavaScript
+error leaves the previous scene active; UI-local animation state restarts.
+Uploads live in PSRAM until reboot, when the built-in GitHub Light screen returns.
+
+The receiver accepts up to 2 MiB and checks the binding ABI, ordered chunks,
+lengths and CRC32. A dedicated vendor bulk OUT interface carries 512-byte packets;
+USB control requests start, inspect, or commit transfers. A one-packet channel
+applies backpressure. Allocation and JavaScript execution stay on the display
+core. UI uploads do not write flash; Rust and driver changes require flashing.
+
+For local rendering checks:
+
+```sh
+cargo run --release --example validate_bundle -- target/ui/paperline
+cargo run --release --example preview -- --bundle target/ui/paperline --output target/paperline.ppm
+python3 tools/preview.py target/paperline.ppm
+```
+
+Paperline's source is `ui/layouts/paperline/Screen.tsx`. The original `ui/Screen.tsx`
+and embedded `ui/generated` bundle remain unchanged.
+
 ## Source and pins
 
 - [`ui/Screen.tsx`](ui/Screen.tsx), [`ui/components`](ui/components), and

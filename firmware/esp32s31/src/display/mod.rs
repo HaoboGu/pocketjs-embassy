@@ -2,7 +2,9 @@
 
 mod ui;
 
+#[cfg(feature = "usb-diagnostics")]
 use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Watch};
 use embassy_time::Instant;
 use rmk::core_traits::Runnable;
@@ -157,13 +159,54 @@ pub async fn run(mut panel: Panel) -> Result<(), pocketjs_embassy::Error> {
     #[cfg(feature = "frame-benchmark")]
     ui.benchmark(&mut panel).await?;
     let mut state = receiver.get().await;
+    let mut transfer = crate::reload::Transfer::new();
+    let mut render = true;
     loop {
-        ui.render(&state, &mut panel).await;
-        if let Either::Second(next) = select(ui.wait(), receiver.changed()).await {
-            state = next;
+        if render {
+            ui.render(&state, &mut panel).await;
+        }
+        render = false;
+        match select3(
+            ui.wait(),
+            receiver.changed(),
+            crate::reload::PACKETS.receive(),
+        )
+        .await
+        {
+            Either3::First(_) => render = true,
+            Either3::Second(next) => {
+                state = next;
+                render = true;
+            }
+            Either3::Third(packet) => match transfer.process(packet) {
+                Ok(Some(bundle)) => {
+                    let checksum = bundle.checksum;
+                    match ui.reload(bundle) {
+                        Ok(()) => {
+                            if let Some(next) = receiver.try_changed() {
+                                state = next;
+                            }
+                            if ui.render(&state, &mut panel).await {
+                                crate::reload::applied(checksum);
+                            } else {
+                                crate::reload::failed(101, "LCD presentation failed");
+                            }
+                        }
+                        Err(error) => {
+                            extern crate alloc;
+                            crate::reload::failed(100, &alloc::format!("{error:?}"));
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    crate::reload::failed(error as u32, "Bundle upload rejected");
+                }
+            },
         }
         if let Some(next) = receiver.try_changed() {
             state = next;
+            render = true;
         }
     }
 }
