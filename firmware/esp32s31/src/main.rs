@@ -1,6 +1,10 @@
 #![no_std]
 #![no_main]
 
+#[cfg(any(feature = "ppa-probe", feature = "ppa-render"))]
+mod acceleration;
+#[cfg(all(feature = "ppa-probe", feature = "ppa-render"))]
+compile_error!("run the PPA primitive probe separately from the renderer");
 mod allocation;
 mod board;
 #[cfg(feature = "usb-diagnostics")]
@@ -85,7 +89,7 @@ async fn main(_spawner: Spawner) {
     };
     // The pinned S31 linker exposes 64 KiB of boot RAM after startup.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 16 * 1024);
+    esp_alloc::heap_allocator!(size: 8 * 1024);
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0);
 

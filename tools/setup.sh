@@ -7,7 +7,7 @@ if [[ ! -d .deps/pocketjs/.git ]]; then
     git clone --filter=blob:none --no-checkout https://github.com/pocket-nexus/pocketjs .deps/pocketjs
 fi
 git -C .deps/pocketjs checkout becc0e21b678384ec31efa2b4f8d0be3aeefad5f
-for patch in pocketjs-style-lookup.patch pocketjs-profiler.patch pocketjs-display-runtime.patch; do
+for patch in pocketjs-style-lookup.patch pocketjs-profiler.patch pocketjs-display-runtime.patch pocketjs-native-execution.patch; do
     if ! git -C .deps/pocketjs apply --reverse --check "$repo_root/patches/$patch" 2>/dev/null; then
         git -C .deps/pocketjs apply "$repo_root/patches/$patch"
     fi

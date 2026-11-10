@@ -8,6 +8,11 @@ license = "GPL-3.0-or-later"
 default = ["vial"]
 vial = ["rmk/vial"]
 rynk = ["rmk/rynk"]
+frame-benchmark = ["usb-diagnostics"]
+ppa-probe = ["frame-benchmark", "dep:esp32s31-pac"]
+ppa-render = ["dep:esp32s31-pac", "dep:pocket-raster", "dep:pocket-drivers"]
+perf-no-cache = ["frame-benchmark", "pocketjs-embassy/perf-no-cache"]
+perf-baseline = ["perf-no-cache", "pocketjs-embassy/perf-baseline"]
 usb-diagnostics = ["esp-backtrace/custom-pre-backtrace", "pocketjs-embassy/frame-profile"]
 
 [[bin]]
@@ -16,6 +21,10 @@ test = false
 bench = false
 
 [dependencies]
+pocket-raster = { path = "../../.deps/pocketjs/engine/raster", optional = true }
+pocket-render = { path = "../../.deps/pocketjs/engine/render" }
+pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers", optional = true }
+esp32s31-pac = { package = "esp32s31", git = "https://github.com/esp-rs/esp-pacs.git", rev = "f7f79f2", optional = true }
 pocketjs-embassy = { path = "../.." }
 rmk = { path = "../../.deps/rmk/rmk", default-features = false, features = [
     "esp32s31_ble",
@@ -66,3 +75,13 @@ codegen-units = 1
 debug = 2
 lto = "thin"
 opt-level = 3
+
+[patch."https://github.com/pocket-nexus/pocketjs"]
+pocket-runtime = { path = "../../.deps/pocketjs/engine/runtime" }
+pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers" }
+pocket-render = { path = "../../.deps/pocketjs/engine/render" }
+pocket-raster = { path = "../../.deps/pocketjs/engine/raster" }
+pocketjs-core = { path = "../../.deps/pocketjs/engine/core" }
+pocket-spec = { path = "../../.deps/pocketjs/engine/spec" }
+pocket-package = { path = "../../.deps/pocketjs/engine/package" }
+pocket-media = { path = "../../.deps/pocketjs/engine/modules/media" }

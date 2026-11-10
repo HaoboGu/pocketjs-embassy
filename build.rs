@@ -34,10 +34,12 @@ fn main() {
         for function in ["printf", "vprintf", "sprintf", "snprintf", "vsnprintf"] {
             build.define(function, format!("pocket_libc_{function}").as_str());
         }
+        println!("cargo:rerun-if-env-changed=POCKETJS_QJS_OPT_LEVEL");
+        let optimization = env::var("POCKETJS_QJS_OPT_LEVEL").unwrap_or_else(|_| "2".into());
         build
             .compiler(toolchain.join("riscv32-esp-elf-gcc"))
             .archiver(toolchain.join("riscv32-esp-elf-ar"))
-            .opt_level_str("s")
+            .opt_level_str(&optimization)
             .flag("-mabi=ilp32f")
             .define("POCKET_EMBEDDED", None);
         println!("cargo:rerun-if-env-changed=POCKETJS_QJS_IRAM");

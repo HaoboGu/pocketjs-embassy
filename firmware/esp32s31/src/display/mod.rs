@@ -151,7 +151,11 @@ pub async fn run(mut panel: Panel) -> Result<(), pocketjs_embassy::Error> {
             snapshot.usb
         );
     }
+    #[cfg(feature = "ppa-probe")]
+    crate::acceleration::probe().await;
     let mut ui = Ui::new()?;
+    #[cfg(feature = "frame-benchmark")]
+    ui.benchmark(&mut panel).await?;
     let mut state = receiver.get().await;
     loop {
         ui.render(&state, &mut panel).await;

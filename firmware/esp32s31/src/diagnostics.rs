@@ -5,15 +5,18 @@ use core::{
 };
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 
+const TRACE_CAPACITY: usize = 768;
+
 struct Trace {
-    bytes: [u8; 6144],
+    bytes: [u8; TRACE_CAPACITY],
     used: usize,
 }
 static TRACE: Mutex<CriticalSectionRawMutex, RefCell<Trace>> = Mutex::new(RefCell::new(Trace {
-    bytes: [0; 6144],
+    bytes: [0; TRACE_CAPACITY],
     used: 0,
 }));
-pub static MEASURING: AtomicBool = AtomicBool::new(true);
+pub static MEASURING: AtomicBool = AtomicBool::new(!cfg!(feature = "frame-benchmark"));
+pub static COARSE_MEASURING: AtomicBool = AtomicBool::new(false);
 pub static STAGE: AtomicU32 = AtomicU32::new(0);
 pub static FRAMES: AtomicU32 = AtomicU32::new(0);
 pub static ALLOC_CYCLES: AtomicU32 = AtomicU32::new(0);
@@ -29,12 +32,17 @@ pub static LOGGER: TraceLogger = TraceLogger;
 pub fn append(bytes: &[u8]) {
     TRACE.lock(|cell| {
         let mut trace = cell.borrow_mut();
-        let start = trace.used;
-        let count = bytes.len().min(trace.bytes.len() - start);
-        trace.bytes[start..start + count].copy_from_slice(&bytes[..count]);
-        trace.used += count;
+        let count = bytes.len().min(trace.bytes.len());
+        let keep = trace.used.min(trace.bytes.len() - count);
+        let previous = trace.used;
+        if keep < previous {
+            trace.bytes.copy_within(previous - keep..previous, 0);
+        }
+        trace.bytes[keep..keep + count].copy_from_slice(&bytes[bytes.len() - count..]);
+        trace.used = keep + count;
     });
 }
+
 impl log::Log for TraceLogger {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
         metadata.level() <= log::Level::Info
@@ -104,7 +112,7 @@ static PROFILE: Mutex<CriticalSectionRawMutex, RefCell<FrameProfile>> =
 
 #[unsafe(no_mangle)]
 extern "C" fn pocket_frame_phase(phase: u32) {
-    if !MEASURING.load(Ordering::Relaxed) {
+    if !MEASURING.load(Ordering::Relaxed) && !COARSE_MEASURING.load(Ordering::Relaxed) {
         return;
     }
     let now = embassy_time::Instant::now().as_micros() as u32;
@@ -128,8 +136,44 @@ extern "C" fn pocket_frame_phase(phase: u32) {
 }
 
 pub fn read(value: u16, index: u16, out: &mut [u8]) -> usize {
+    #[cfg(feature = "ppa-probe")]
+    if value == 0x4d5b {
+        return crate::acceleration::read(index, out);
+    }
+    #[cfg(feature = "frame-benchmark")]
+    if value == 0x4d5a {
+        return PRESENTS.lock(|cell| {
+            let rows = cell.borrow();
+            if index == u16::MAX {
+                let bytes = (rows.len() as u32).to_le_bytes();
+                let length = out.len().min(4);
+                out[..length].copy_from_slice(&bytes[..length]);
+                return length;
+            }
+            let Some(row) = rows.get(usize::from(index)) else {
+                return 0;
+            };
+            let mut bytes = [0; 56];
+            for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(row) {
+                slot.copy_from_slice(&value.to_le_bytes());
+            }
+            let length = out.len().min(bytes.len());
+            out[..length].copy_from_slice(&bytes[..length]);
+            length
+        });
+    }
+    #[cfg(feature = "frame-benchmark")]
     if value == 0x4d59 {
-        FIXTURES.lock(|cell| {
+        if index == u16::MAX {
+            let length = out.len().min(4);
+            out[..length].fill(0);
+            return length;
+        }
+        return 0;
+    }
+    #[cfg(not(feature = "frame-benchmark"))]
+    if value == 0x4d59 {
+        return FIXTURES.lock(|cell| {
             let fixtures = cell.borrow();
             if index == u16::MAX {
                 let bytes = (fixtures.used as u32).to_le_bytes();
@@ -152,8 +196,9 @@ pub fn read(value: u16, index: u16, out: &mut [u8]) -> usize {
             let length = out.len().min(bytes.len());
             out[..length].copy_from_slice(&bytes[..length]);
             length
-        })
-    } else if value == 0x4d58 {
+        });
+    }
+    if value == 0x4d58 {
         let fields = DETAIL.lock(|cell| cell.borrow().completed);
         let mut bytes = [0; 52];
         for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
@@ -378,16 +423,27 @@ extern "C" fn pocket_native_op(micros: u32) {
     });
 }
 
+#[cfg(not(feature = "frame-benchmark"))]
 struct Fixtures {
     used: usize,
-    rows: [[u32; 23]; 32],
+    rows: alloc::vec::Vec<[u32; 23]>,
 }
+#[cfg(not(feature = "frame-benchmark"))]
 static FIXTURES: Mutex<CriticalSectionRawMutex, RefCell<Fixtures>> =
     Mutex::new(RefCell::new(Fixtures {
         used: 0,
-        rows: [[0; 23]; 32],
+        rows: alloc::vec::Vec::new(),
     }));
 
+#[cfg(not(feature = "frame-benchmark"))]
+pub fn prepare_fixtures() {
+    let rows = alloc::vec![[0; 23]; 32];
+    FIXTURES.lock(|cell| {
+        *cell.borrow_mut() = Fixtures { used: 0, rows };
+    });
+}
+
+#[cfg(not(feature = "frame-benchmark"))]
 pub fn report_detail(label: &str, total_us: u64, pixels_hash: u32, cycles: u32) {
     let values = DETAIL.lock(|cell| cell.borrow().completed);
     let native = PROFILE.lock(|cell| cell.borrow().completed_us);
@@ -434,4 +490,27 @@ pub fn report_detail(label: &str, total_us: u64, pixels_hash: u32, cycles: u32) 
         values[9],
         values[10]
     );
+}
+
+extern crate alloc;
+#[cfg(feature = "frame-benchmark")]
+static PRESENTS: Mutex<CriticalSectionRawMutex, RefCell<alloc::vec::Vec<[u32; 14]>>> =
+    Mutex::new(RefCell::new(alloc::vec::Vec::new()));
+#[cfg(feature = "frame-benchmark")]
+pub fn record_present(row: [u32; 8]) {
+    let phases = PROFILE.lock(|cell| cell.borrow().completed_us);
+    let mut complete = [0; 14];
+    complete[..8].copy_from_slice(&row);
+    complete[8..].copy_from_slice(&phases);
+    PRESENTS.lock(|cell| cell.borrow_mut().push(complete));
+}
+
+#[cfg(feature = "frame-benchmark")]
+pub fn prepare_presents() {
+    let rows = alloc::vec::Vec::with_capacity(if cfg!(feature = "ppa-render") {
+        8 * 192
+    } else {
+        4 * 192
+    });
+    PRESENTS.lock(|cell| *cell.borrow_mut() = rows);
 }

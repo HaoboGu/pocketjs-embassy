@@ -1,5 +1,5 @@
 diff --git a/framework/compiler/jsx-plugin.ts b/framework/compiler/jsx-plugin.ts
-index 0136789a..a326a056 100644
+index 0136789a..a9fd5373 100644
 --- a/framework/compiler/jsx-plugin.ts
 +++ b/framework/compiler/jsx-plugin.ts
 @@ -1,6 +1,7 @@
@@ -10,9 +10,65 @@ index 0136789a..a326a056 100644
  import type { ParserOptions } from "@babel/parser";
  import solidPreset from "babel-preset-solid";
  import tsPreset from "@babel/preset-typescript"; // untyped - see framework/compiler/ambient.d.ts
-@@ -325,6 +326,49 @@ function makeCollector(out: Collected, framework: PocketFramework): PluginObj {
+@@ -324,7 +325,105 @@ function makeCollector(out: Collected, framework: PocketFramework): PluginObj {
+     name: "pocketjs-collect",
      visitor: {
        Program: {
++        exit(program) {
++          if (framework !== "solid") return;
++          program.scope.crawl();
++          const literals = new Map<string, t.Identifier>();
++          const create = program.scope.generateUidIdentifier("createClassBinding");
++          const apply = program.scope.generateUidIdentifier("setClassBinding");
++          const declarations: t.VariableDeclarator[] = [];
++          const eligible = (node: t.Node): boolean =>
++            t.isStringLiteral(node) ? classNodes.has(node) :
++            t.isConditionalExpression(node) && eligible(node.consequent) && eligible(node.alternate);
++          const lower = (node: t.Expression): t.Expression => {
++            if (t.isConditionalExpression(node)) {
++              return t.conditionalExpression(node.test, lower(node.consequent), lower(node.alternate));
++            }
++            const value = (node as t.StringLiteral).value;
++            let id = literals.get(value);
++            if (!id) {
++              id = program.scope.generateUidIdentifier("classBinding");
++              literals.set(value, id);
++              declarations.push(t.variableDeclarator(id, t.callExpression(create, [t.stringLiteral(value)])));
++            }
++            return t.cloneNode(id);
++          };
++          program.traverse({
++            CallExpression(path) {
++              const { callee, arguments: args } = path.node;
++              if (!t.isIdentifier(callee) || args.length < 3 || !t.isStringLiteral(args[1], { value: "class" })) return;
++              const setter = path.scope.getBinding(callee.name)?.path;
++              if (!setter?.isImportSpecifier() || !t.isIdentifier(setter.node.imported, { name: "setProp" })) return;
++              const declaration = setter.parentPath;
++              if (!declaration.isImportDeclaration() || declaration.node.source.value !== FRAMEWORKS.solid.rendererPath) return;
++              let value = args[2];
++              let variable: t.VariableDeclarator | undefined;
++              if (t.isIdentifier(value)) {
++                const binding = path.scope.getBinding(value.name)?.path;
++                if (!binding?.isVariableDeclarator() || !binding.node.init) return;
++                variable = binding.node;
++                value = binding.node.init;
++              }
++              if (!t.isExpression(value) || !eligible(value)) return;
++              if (variable) variable.init = lower(value);
++              else args[2] = lower(value);
++              path.node.callee = t.cloneNode(apply);
++              args.splice(1, 1);
++            },
++          });
++          if (declarations.length) {
++            program.node.body.unshift(t.importDeclaration([
++              t.importSpecifier(create, t.identifier("createClassBinding")),
++              t.importSpecifier(apply, t.identifier("setClassBinding")),
++            ], t.stringLiteral(FRAMEWORKS.solid.rendererPath)));
++            const firstStatement = program.node.body.findIndex(node => !t.isImportDeclaration(node));
++            program.node.body.splice(firstStatement, 0, t.variableDeclaration("const", declarations));
++          }
++        },
          enter(program) {
 +          if (framework === "solid") program.traverse({
 +            JSXExpressionContainer(path) {
@@ -140,7 +196,7 @@ index e59d1c83..82c0f0ab 100644
 +
 +export function hasFrameHooks(): boolean { const a = registry.freeze(), b = systemRegistry.freeze(); return a.callbacks.length > 0 || a.placed.length > 0 || b.callbacks.length > 0 || b.placed.length > 0; }
 diff --git a/framework/src/index.ts b/framework/src/index.ts
-index 02b3f588..99357b8a 100644
+index 02b3f588..1719d49c 100644
 --- a/framework/src/index.ts
 +++ b/framework/src/index.ts
 @@ -1,3 +1,16 @@
@@ -160,6 +216,24 @@ index 02b3f588..99357b8a 100644
  // PocketJS runtime entry: render(<App/>) / mount(<App/>).
  //
  // Frame contract (every host): once per vblank/rAF tick the host calls
+@@ -40,7 +53,7 @@ import {
+ } from "./renderer.ts";
+ import { setOverlayRoot } from "./overlay.ts";
+ import { mountAuxiliarySurface, unmountAuxiliarySurface } from "./display.ts";
+-import { registerStyles, resolveStyle } from "./styles.ts";
++import { registerStyles, resolveStyle, styleRevision } from "./styles.ts";
+ import { handleFrame, setAuxiliaryHitRoot, setHitRoot, setInputRoot, withDeferredPress, type DeferredPress } from "./input.ts";
+ import { __runGestures, resetGestures } from "./gesture.ts";
+ import { installTouchActivation } from "./touch-activation.ts";
+@@ -186,7 +199,7 @@ export function render(code: () => unknown, opts: RenderOptions = {}): () => voi
+   const host = detectHost(opts.ops);
+   installHost(host);
+ 
+-  setStyleResolver(resolveStyle);
++  setStyleResolver(resolveStyle, styleRevision);
+   if (opts.styles) registerStyles(opts.styles);
+ 
+   const nativeTextureTable = host.kind === "native"
 @@ -277,6 +290,10 @@ export function render(code: () => unknown, opts: RenderOptions = {}): () => voi
    resetEffects();
    initDevtools(host.ops); // DevTools shim (docs/DEVTOOLS.md): flight recorder +
@@ -213,6 +287,85 @@ index 963741df..1daa455b 100644
  }
 +
 +export function hasModelTasks(): boolean { return taskRuntimes.size > 0 || deliveries.length > 0 || commands.length > 0; }
+diff --git a/framework/src/native-tree.ts b/framework/src/native-tree.ts
+index bbc72025..5c2e1f20 100644
+--- a/framework/src/native-tree.ts
++++ b/framework/src/native-tree.ts
+@@ -314,10 +314,51 @@ export function decorateNativeNode(node: NodeMirror): NodeMirror {
+ decorateNativeNode(rootMirror);
+ 
+ let styleResolver: ((cls: string) => number | undefined) | null = null;
++let styleRevision: (() => number) | undefined;
++let styleResolverEpoch = 0;
+ 
+ /** Wire the class->styleId lookup (index.ts injects styles.ts's resolveStyle). */
+-export function setStyleResolver(fn: (cls: string) => number | undefined): void {
++export function setStyleResolver(fn: (cls: string) => number | undefined, revision?: () => number): void {
+   styleResolver = fn;
++  styleRevision = revision;
++  styleResolverEpoch++;
++}
++
++/** Compiler-owned literal binding; resolution follows the current style table. */
++export interface ClassBinding {
++  value: string;
++  id: number | undefined;
++  epoch: number;
++  revision: number | undefined;
++}
++export function createClassBinding(value: string): ClassBinding {
++  return { value, id: undefined, epoch: -1, revision: undefined };
++}
++export function setClassBinding(node: NodeMirror, binding: ClassBinding, previous?: ClassBinding): ClassBinding {
++  if (binding === previous) return binding;
++  domAttrs(node).class = binding.value;
++  const ops = getOps();
++  treeMutated();
++  if (binding.value === "") {
++    ops.setStyle(node.id, STYLE_ID_NONE);
++    return binding;
++  }
++  const revision = styleRevision?.();
++  if (revision === undefined || binding.revision !== revision || binding.epoch !== styleResolverEpoch) {
++    binding.id = styleResolver?.(binding.value);
++    binding.epoch = styleResolverEpoch;
++    binding.revision = revision;
++  }
++  if (binding.id === undefined) {
++    if (getHost().strict) {
++      throw new Error(`PocketJS: unknown class "${binding.value}" - not in the compiled style table ` +
++        "(dynamic classes must be ternaries of full literals)");
++    }
++    missCounters.unknownClass++;
++  } else {
++    ops.setStyle(node.id, binding.id);
++  }
++  return binding;
+ }
+ 
+ /** Non-strict-host miss counters (PSP: don't crash, count). */
+diff --git a/framework/src/renderer-solid.ts b/framework/src/renderer-solid.ts
+index ed332bd1..986b043b 100644
+--- a/framework/src/renderer-solid.ts
++++ b/framework/src/renderer-solid.ts
+@@ -27,6 +27,8 @@ import {
+   rootMirror,
+   runSweep,
+   setProp,
++  createClassBinding,
++  setClassBinding,
+   setStyleResolver,
+   type HostProps,
+   type NodeMirror,
+@@ -52,6 +54,8 @@ export {
+   rootMirror,
+   runSweep,
+   setProp,
++  createClassBinding,
++  setClassBinding,
+   setStyleResolver,
+   type NodeMirror,
+ };
 diff --git a/framework/src/services.ts b/framework/src/services.ts
 index e90f044c..6c35a779 100644
 --- a/framework/src/services.ts
@@ -257,10 +410,10 @@ index 97078c30..294825f6 100644
 +
 +export function hasSystemLayers(): boolean { return layers.length > 0 || filter !== null; }
 diff --git a/tests/compiler-portability.test.ts b/tests/compiler-portability.test.ts
-index fb4bb228..5b7bf790 100644
+index fb4bb228..25adbc09 100644
 --- a/tests/compiler-portability.test.ts
 +++ b/tests/compiler-portability.test.ts
-@@ -131,3 +131,45 @@ describe("compiler filesystem portability", () => {
+@@ -131,3 +131,61 @@ describe("compiler filesystem portability", () => {
      expect(frameworkVariantPath(source, "octane")).toBe(source);
    });
  });
@@ -306,11 +459,44 @@ index fb4bb228..5b7bf790 100644
 +  const transformed = await transformFile("/virtual/custom-text-owner.tsx", source, "solid");
 +  expect(transformed.code).toMatch(/memo/);
 +});
++
++
++test("literal native classes compile to retained bindings without lowering dynamic classes", async () => {
++  const source = `export function App(props: { active: boolean, dynamic: string }) {
++    return <view class="p-2"><view class={props.active ? "bg-red-500" : "bg-blue-500"} /><view class={props.dynamic} /></view>;
++  }`;
++  const result = await transformFile("/virtual/retained-classes.tsx", source, "solid");
++  expect(result.code).toContain("createClassBinding");
++  expect(result.code).toContain("setClassBinding");
++  expect(result.code).toContain('"class",');
++  expect(result.classStrings).toContain("p-2");
++  expect(result.classStrings).toContain("bg-red-500");
++  expect(result.classStrings).toContain("bg-blue-500");
++  const manual = await transformFile("/virtual/manual-setter.ts", `import {setProp} from "${RENDERER_SOLID_PATH}"; export function set(node: any) { setProp(node, "class", "p-2"); }`, "solid");
++  expect(manual.code).not.toContain("ClassBinding");
++});
 diff --git a/tests/renderer.test.ts b/tests/renderer.test.ts
-index 3431816e..73136081 100644
+index 3431816e..13fd8569 100644
 --- a/tests/renderer.test.ts
 +++ b/tests/renderer.test.ts
-@@ -92,7 +92,7 @@ import { getAuxiliarySurfaceRoots } from "../framework/src/display.ts";
+@@ -50,6 +50,8 @@ import {
+   retain,
+   runSweep,
+   setProp,
++  createClassBinding,
++  setClassBinding,
+   setStyleResolver,
+   type NodeMirror,
+ } from "../framework/src/renderer.ts";
+@@ -57,6 +59,7 @@ import {
+   registerStyles,
+   resetStyles,
+   resolveStyle,
++  styleRevision,
+ } from "../framework/src/styles.ts";
+ import {
+   getFocused,
+@@ -92,7 +95,7 @@ import { getAuxiliarySurfaceRoots } from "../framework/src/display.ts";
  import { ClassicButton, ClassicSheet } from "../framework/src/classic.ts";
  import { __runGestures, resetGestures, pushTouchBlock } from "../framework/src/gesture.ts";
  import { __packTouch, __setTouches, __resetTouches } from "../framework/src/touch.ts";
@@ -319,7 +505,7 @@ index 3431816e..73136081 100644
  import {
    DeepZoom,
    type DeepZoomGesture,
-@@ -1930,3 +1930,40 @@ test("Text resource swaps one complete value and unsubscribes from superseded ba
+@@ -1930,3 +1933,75 @@ test("Text resource swaps one complete value and unsubscribes from superseded ba
    expect(host.of("setText").some(c => c[2] === "Error")).toBe(true);
    dispose(); expect(second.listeners.size).toBe(0);
  });
@@ -359,4 +545,39 @@ index 3431816e..73136081 100644
 +  expect(fired).toBe(1);
 +  expect(g.__pocketNeedsFrame).toBe(false);
 +  dispose();
++});
++
++
++test("compiled classes preserve attributes and invalidate on style registration", () => {
++  registerStyles({ "p-2": 1 });
++  let lookups = 0;
++  const resolver = (value: string) => { lookups++; return resolveStyle(value); };
++  setStyleResolver(resolver, styleRevision);
++  const node = createElement("view"), binding = createClassBinding("  p-2  ");
++  setClassBinding(node, binding);
++  setClassBinding(node, binding);
++  expect(lookups).toBe(1);
++  expect(node.domAttrs?.class).toBe("  p-2  ");
++  expect(host.of("setStyle").at(-1)).toEqual(["setStyle", node.id, 1]);
++  registerStyles({ "p-2": 7 });
++  setClassBinding(node, binding);
++  expect(lookups).toBe(2);
++  expect(host.of("setStyle").at(-1)).toEqual(["setStyle", node.id, 7]);
++  setStyleResolver(resolver, styleRevision);
++  setClassBinding(node, binding);
++  expect(lookups).toBe(3);
++  setClassBinding(node, createClassBinding(""));
++  expect(node.domAttrs?.class).toBe("");
++  expect(host.of("setStyle").at(-1)).toEqual(["setStyle", node.id, STYLE_ID_NONE]);
++});
++
++test("compiled classes preserve custom resolver and unknown-class behavior", () => {
++  let id = 0;
++  setStyleResolver(() => ++id);
++  const node = createElement("view"), binding = createClassBinding("p-2");
++  setClassBinding(node, binding);
++  setClassBinding(node, binding);
++  expect(host.of("setStyle").slice(-2)).toEqual([["setStyle", node.id, 1], ["setStyle", node.id, 2]]);
++  setStyleResolver(resolveStyle, styleRevision);
++  expect(() => setClassBinding(node, binding)).toThrow("unknown class");
 +});

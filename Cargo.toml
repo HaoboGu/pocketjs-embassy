@@ -7,6 +7,8 @@ publish = false
 
 [features]
 frame-profile = []
+perf-no-cache = []
+perf-baseline = ["perf-no-cache"]
 
 [dependencies]
 pocket-runtime = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
@@ -29,3 +31,13 @@ cc = "1.2"
 
 [profile.release]
 panic = "abort"
+
+[patch."https://github.com/pocket-nexus/pocketjs"]
+pocket-runtime = { path = ".deps/pocketjs/engine/runtime" }
+pocket-drivers = { path = ".deps/pocketjs/engine/drivers" }
+pocket-render = { path = ".deps/pocketjs/engine/render" }
+pocket-raster = { path = ".deps/pocketjs/engine/raster" }
+pocketjs-core = { path = ".deps/pocketjs/engine/core" }
+pocket-spec = { path = ".deps/pocketjs/engine/spec" }
+pocket-package = { path = ".deps/pocketjs/engine/package" }
+pocket-media = { path = ".deps/pocketjs/engine/modules/media" }

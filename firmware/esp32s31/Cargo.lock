@@ -2251,7 +2251,6 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pocket-drivers"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-spec",
 ]
@@ -2259,7 +2258,6 @@ dependencies = [
 [[package]]
 name = "pocket-media"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-spec",
 ]
@@ -2267,7 +2265,6 @@ dependencies = [
 [[package]]
 name = "pocket-package"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-drivers",
  "pocket-spec",
@@ -2276,7 +2273,6 @@ dependencies = [
 [[package]]
 name = "pocket-raster"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-drivers",
  "pocket-render",
@@ -2286,7 +2282,6 @@ dependencies = [
 [[package]]
 name = "pocket-render"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-drivers",
  "pocket-spec",
@@ -2295,7 +2290,6 @@ dependencies = [
 [[package]]
 name = "pocket-runtime"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-drivers",
  "pocket-package",
@@ -2307,12 +2301,10 @@ dependencies = [
 [[package]]
 name = "pocket-spec"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 
 [[package]]
 name = "pocketjs-core"
 version = "0.16.0"
-source = "git+https://github.com/pocket-nexus/pocketjs?rev=becc0e21b678384ec31efa2b4f8d0be3aeefad5f#becc0e21b678384ec31efa2b4f8d0be3aeefad5f"
 dependencies = [
  "pocket-drivers",
  "pocket-media",
@@ -2681,8 +2673,12 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "esp-storage",
+ "esp32s31",
  "heapless 0.9.3",
  "log",
+ "pocket-drivers",
+ "pocket-raster",
+ "pocket-render",
  "pocketjs-embassy",
  "rmk",
  "static_cell",

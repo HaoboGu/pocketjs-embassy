@@ -16,7 +16,7 @@ impl Handler for BootloaderHandler {
         if request.request_type != RequestType::Vendor
             || request.recipient != Recipient::Device
             || request.request != 0x74
-            || !matches!(request.value, 0x4d53..=0x4d56 | 0x4d58..=0x4d59)
+            || !matches!(request.value, 0x4d53..=0x4d56 | 0x4d58..=0x4d5b)
         {
             return None;
         }

@@ -232,3 +232,22 @@ fn framework_work_keeps_an_idle_application_running() {
     assert!(!ui.animating());
     assert!(ui.frame(connected(), 80_000, false).unwrap().is_none());
 }
+
+#[test]
+#[cfg(not(feature = "perf-baseline"))]
+fn native_animation_waits_for_a_tick_but_input_is_immediate() {
+    let mut ui = JsUi::new().unwrap();
+    let mut model = connected();
+    model.charging_left = true;
+    ui.frame(model.clone(), 0, true).unwrap();
+    ui.frame(model.clone(), 1_000_000, false).unwrap();
+    assert_eq!(ui.next_frame_us(), Some(1_016_667));
+    assert!(ui.frame(model.clone(), 1_000_001, false).unwrap().is_none());
+    model.key_labels[0].push_str("A").unwrap();
+    model.presses = 1;
+    assert!(ui.frame(model.clone(), 1_000_002, false).unwrap().is_some());
+    assert!(ui.contains_text("A"));
+    model.key_labels[0].clear();
+    ui.frame(model, 1_000_003, false).unwrap();
+    assert!(ui.contains_text("Ready"));
+}

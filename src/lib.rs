@@ -104,14 +104,50 @@ pub struct JsUi {
     handle: Box<Handle>,
     guest: CGuest,
     engine: NonNull<c_void>,
-    pixels: Vec<u16>,
+    pixels: Framebuffer,
     model: Option<Model>,
     clock_tick: u64,
     last_us: u64,
     animating: bool,
     next_js_us: u64,
     damage: DamageTracker<8>,
+    pending_frame: bool,
 }
+#[repr(C, align(64))]
+#[derive(Clone)]
+struct PixelBlock([u16; 32]);
+struct Framebuffer(Vec<PixelBlock>);
+impl Framebuffer {
+    fn new() -> Self {
+        Self(vec![PixelBlock([0; 32]); WIDTH * HEIGHT / 32])
+    }
+}
+impl core::ops::Deref for Framebuffer {
+    type Target = [u16];
+    fn deref(&self) -> &[u16] {
+        // Every aligned block occupies exactly its 32 pixels.
+        unsafe { core::slice::from_raw_parts(self.0.as_ptr().cast(), self.0.len() * 32) }
+    }
+}
+impl core::ops::DerefMut for Framebuffer {
+    fn deref_mut(&mut self) -> &mut [u16] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.as_mut_ptr().cast(), self.0.len() * 32) }
+    }
+}
+
+/// A renderer owns the framebuffer until every submitted operation completes.
+/// The future stays on the UI's owning executor.
+#[allow(async_fn_in_trait)]
+pub trait FrameRenderer {
+    async fn render(
+        &mut self,
+        resources: &impl pocket_drivers::RenderResources,
+        commands: pocket_render::damage::PreparedDrawList<'_>,
+        pixels: &mut [u16],
+        regions: &[pocket_render::damage::DamageRect],
+    );
+}
+
 impl JsUi {
     pub fn new() -> Result<Self, Error> {
         let handle = Handle::new(runtime_config())?;
@@ -135,13 +171,14 @@ impl JsUi {
             handle,
             guest,
             engine,
-            pixels: vec![0; WIDTH * HEIGHT],
+            pixels: Framebuffer::new(),
             model: None,
             clock_tick: 0,
             last_us: 0,
             animating: true,
             next_js_us: 0,
             damage: DamageTracker::new(),
+            pending_frame: false,
         };
         let context = ui.handle.op_context();
         context
@@ -149,6 +186,11 @@ impl JsUi {
             .ui
             .set_viewport(WIDTH as f32, HEIGHT as f32);
         context.core_mut()?.ui.set_stable_motion_paint(true);
+        context.core_mut()?.ui.set_fast_absolute_layout(true);
+        context
+            .core_mut()?
+            .ui
+            .set_draw_cache_enabled(!cfg!(feature = "perf-no-cache"));
         assert!(context.core_mut()?.ui.set_tick_rate(60));
         let environment = GuestEnvironment {
             host: "mosaico-experiment",
@@ -186,6 +228,70 @@ impl JsUi {
         now_us: u64,
         force: bool,
     ) -> Result<Option<DamagePlan<8>>, Error> {
+        let Some(damage) = self.prepare_frame(model, now_us, force)? else {
+            return Ok(None);
+        };
+        let context = self.handle.op_context();
+        let state = context.core()?;
+        if let Some(commands) = self.damage.prepared_commands() {
+            pocket_raster::render_prepared_rgb565_regions(
+                &state.ui,
+                commands,
+                &mut self.pixels,
+                1,
+                damage.regions(),
+            );
+        }
+        profile_frame(5);
+        self.damage.commit(
+            &state.ui,
+            &state.ui.current_draw_list().words,
+            DamageTarget::new(WIDTH as u32, HEIGHT as u32, 1, 0),
+        );
+        profile_frame(6);
+        self.pending_frame = false;
+        Ok((!damage.regions().is_empty()).then_some(damage))
+    }
+
+    #[allow(
+        clippy::await_holding_refcell_ref,
+        reason = "The exclusive JsUi borrow prevents guest reentry while render resources are in use."
+    )]
+    pub async fn frame_with_renderer(
+        &mut self,
+        model: Model,
+        now_us: u64,
+        force: bool,
+        renderer: &mut impl FrameRenderer,
+    ) -> Result<Option<DamagePlan<8>>, Error> {
+        let Some(damage) = self.prepare_frame(model, now_us, force)? else {
+            return Ok(None);
+        };
+        let context = self.handle.op_context();
+        let state = context.core()?;
+        if let Some(commands) = self.damage.prepared_commands() {
+            renderer
+                .render(&state.ui, commands, &mut self.pixels, damage.regions())
+                .await;
+        }
+        profile_frame(5);
+        self.damage.commit(
+            &state.ui,
+            &state.ui.current_draw_list().words,
+            DamageTarget::new(WIDTH as u32, HEIGHT as u32, 1, 0),
+        );
+        profile_frame(6);
+        self.pending_frame = false;
+        Ok((!damage.regions().is_empty()).then_some(damage))
+    }
+
+    fn prepare_frame(
+        &mut self,
+        model: Model,
+        now_us: u64,
+        force: bool,
+    ) -> Result<Option<DamagePlan<8>>, Error> {
+        let force = force || self.pending_frame;
         if now_us < self.last_us {
             return Err(RuntimeError::InvalidArgument.into());
         }
@@ -194,9 +300,17 @@ impl JsUi {
         if !changed && !self.animating && !force {
             return Ok(None);
         }
+        let target_tick = now_us.saturating_mul(60) / 1_000_000;
+        if !cfg!(feature = "perf-baseline")
+            && !changed
+            && !force
+            && target_tick == self.clock_tick
+            && now_us < self.next_js_us
+        {
+            return Ok(None);
+        }
         profile_frame(0);
         let was_animating = self.model.is_some() && self.animating;
-        let target_tick = now_us.saturating_mul(60) / 1_000_000;
         if !was_animating {
             self.clock_tick = target_tick;
         }
@@ -269,27 +383,44 @@ impl JsUi {
         }
         profile_frame(3);
         let target = DamageTarget::new(WIDTH as u32, HEIGHT as u32, 1, 0);
-        let mut damage = self
+        let damage = self
             .damage
-            .prepare_with_motion(&state.ui, words, target)
+            .prepare_cached(&state.ui, words, target)
             .map_err(|_| Error::Runtime(RuntimeError::InvalidState))?;
-        damage.repaint_motion();
         profile_frame(4);
-        pocket_raster::render_scaled_rgb565_regions(
-            &state.ui,
-            words,
-            &mut self.pixels,
-            1,
-            damage.regions(),
-        );
-        profile_frame(5);
-        self.damage.commit(&state.ui, words, target);
-        profile_frame(6);
-        Ok(if damage.regions().is_empty() {
-            None
-        } else {
-            Some(damage)
-        })
+        self.pending_frame = true;
+        Ok(Some(damage))
+    }
+
+    /// Next native animation tick or JavaScript deadline; state changes can wake sooner.
+    pub fn next_frame_us(&self) -> Option<u64> {
+        if self.pending_frame {
+            return Some(self.last_us);
+        }
+        if self.model.is_none() {
+            return Some(0);
+        }
+        if !self.animating {
+            return None;
+        }
+        if cfg!(feature = "perf-baseline") {
+            return Some(self.last_us);
+        }
+        let native = self
+            .clock_tick
+            .saturating_add(1)
+            .saturating_mul(1_000_000)
+            .div_ceil(60);
+        Some(native.min(self.next_js_us))
+    }
+
+    pub fn cache_info(&self) -> (bool, bool, usize, u32) {
+        self.handle
+            .op_context()
+            .core()
+            .unwrap()
+            .ui
+            .draw_cache_info()
     }
 
     pub fn animating(&self) -> bool {
@@ -302,7 +433,8 @@ impl JsUi {
     #[cfg(not(target_os = "none"))]
     pub fn reference_pixels(&self) -> Vec<u16> {
         let context = self.handle.op_context();
-        let state = context.core().expect("frame is not borrowed");
+        let mut state = context.core_mut().expect("frame is not borrowed");
+        state.ui.draw_uncached();
         let mut pixels = vec![0; WIDTH * HEIGHT];
         pocket_raster::render_scaled_rgb565(
             &state.ui,
@@ -377,5 +509,162 @@ fn runtime_config() -> RuntimeConfig {
             capabilities: Cow::Borrowed(&[]),
             required_inputs: InputClasses::NONE,
         },
+    }
+}
+
+#[cfg(test)]
+mod layout_differential {
+    use super::*;
+    #[test]
+    fn async_renderer_matches_software_after_yielding() {
+        use core::{
+            future::{Future, poll_fn},
+            task::{Context, Poll, Waker},
+        };
+        struct YieldingRenderer;
+        impl FrameRenderer for YieldingRenderer {
+            async fn render(
+                &mut self,
+                resources: &impl pocket_drivers::RenderResources,
+                commands: pocket_render::damage::PreparedDrawList<'_>,
+                pixels: &mut [u16],
+                regions: &[pocket_render::damage::DamageRect],
+            ) {
+                let mut first = true;
+                poll_fn(|cx| {
+                    if core::mem::replace(&mut first, false) {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(())
+                    }
+                })
+                .await;
+                pocket_raster::render_prepared_rgb565_regions(
+                    resources, commands, pixels, 1, regions,
+                );
+            }
+        }
+        let mut software = JsUi::new().unwrap();
+        let mut asynchronous = JsUi::new().unwrap();
+        let mut renderer = YieldingRenderer;
+        let mut model = Model {
+            link: "Connected",
+            usb: "Ready",
+            ..Model::default()
+        };
+        for frame in 0..48 {
+            model.layer = (frame / 12) as u8;
+            model.modifiers = if frame % 3 == 0 { 5 } else { 0 };
+            model.key_labels[0].clear();
+            if frame % 2 == 0 {
+                model.key_labels[0].push_str("Space").unwrap();
+            }
+            software
+                .frame(model.clone(), frame * 20_000, frame == 0)
+                .unwrap();
+            {
+                let mut next = core::pin::pin!(asynchronous.frame_with_renderer(
+                    model.clone(),
+                    frame * 20_000,
+                    frame == 0,
+                    &mut renderer
+                ));
+                let mut context = Context::from_waker(Waker::noop());
+                let first = next.as_mut().poll(&mut context);
+                let complete = if first.is_pending() {
+                    next.as_mut().poll(&mut context)
+                } else {
+                    first
+                };
+                assert!(matches!(complete, Poll::Ready(Ok(_))));
+            }
+            assert_eq!(software.pixels(), asynchronous.pixels(), "frame {frame}");
+            assert_eq!(software.next_frame_us(), asynchronous.next_frame_us());
+        }
+    }
+
+    #[test]
+    fn cancelled_renderer_forces_a_complete_retry() {
+        use core::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
+        struct PendingRenderer;
+        impl FrameRenderer for PendingRenderer {
+            async fn render(
+                &mut self,
+                _: &impl pocket_drivers::RenderResources,
+                _: pocket_render::damage::PreparedDrawList<'_>,
+                pixels: &mut [u16],
+                _: &[pocket_render::damage::DamageRect],
+            ) {
+                pixels[0] ^= 0xffff;
+                core::future::pending::<()>().await;
+            }
+        }
+        let mut ui = JsUi::new().unwrap();
+        let mut model = Model {
+            link: "Connected",
+            usb: "Ready",
+            ..Model::default()
+        };
+        ui.frame(model.clone(), 0, true).unwrap();
+        ui.frame(model.clone(), 1_000_000, false).unwrap();
+        model.key_labels[0].push_str("A").unwrap();
+        {
+            let mut renderer = PendingRenderer;
+            let mut frame = core::pin::pin!(ui.frame_with_renderer(
+                model.clone(),
+                1_020_000,
+                false,
+                &mut renderer
+            ));
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(matches!(frame.as_mut().poll(&mut context), Poll::Pending));
+        }
+        assert_eq!(ui.next_frame_us(), Some(1_020_000));
+        let damage = ui.frame(model, 1_020_000, false).unwrap().unwrap();
+        assert!(damage.is_full_redraw());
+        assert_eq!(ui.pixels(), ui.reference_pixels());
+    }
+
+    #[test]
+    fn keyboard_scene_matches_general_layout_across_state_changes() {
+        let mut fast = JsUi::new().unwrap();
+        let mut general = JsUi::new().unwrap();
+        general
+            .handle
+            .op_context()
+            .core_mut()
+            .unwrap()
+            .ui
+            .set_fast_absolute_layout(false);
+        let mut model = Model {
+            link: "Connected",
+            usb: "Ready",
+            battery_left: 85,
+            battery_right: 72,
+            ..Model::default()
+        };
+        for frame in 0..180u64 {
+            model.key_labels[0].clear();
+            if frame % 2 == 0 {
+                model.key_labels[0]
+                    .push_str(if frame % 4 == 0 { "A" } else { "Space" })
+                    .unwrap();
+            }
+            model.presses = (frame / 2) as u8;
+            model.modifiers = if frame % 3 == 0 { 5 } else { 0 };
+            model.layer = (frame / 15) as u8;
+            model.charging_left = frame % 40 < 20;
+            model.battery_right = 72 - (frame / 30) as i32;
+            fast.frame(model.clone(), frame * 20_000, frame == 0)
+                .unwrap();
+            general
+                .frame(model.clone(), frame * 20_000, frame == 0)
+                .unwrap();
+            assert_eq!(fast.pixels(), general.pixels(), "frame {frame}");
+        }
     }
 }

@@ -14,6 +14,8 @@ parser.add_argument("--serial", default="vial:f64c2b3c:d08b40")
 parser.add_argument("--output", type=Path)
 parser.add_argument("--profile", action="store_true")
 parser.add_argument("--fixtures", action="store_true")
+parser.add_argument("--presents", action="store_true")
+parser.add_argument("--accelerator", action="store_true")
 args = parser.parse_args()
 devices = [d for d in usb.core.find(find_all=True, idVendor=0x4c4b, idProduct=0x4644) if d.serial_number == args.serial]
 if len(devices) != 1:
@@ -39,8 +41,28 @@ if args.fixtures:
     assert count <= 32
     fields = ("pressed", "total_us", "completed_us", "serialize_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us", "js_call_us", "jobs_us", "native_ops_us", "native_ops_count", "state_us", "js_us", "draw_us", "damage_us", "raster_us", "commit_us", "pixels_hash", "cycles")
     result["fixtures"] = [dict(zip(fields, struct.unpack("<23I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d59, index, 92, timeout=2000))))) for index in range(count)]
+if args.presents:
+    if "Full-frame benchmark complete" not in result["log"]:
+        parser.error("frame benchmark is still running; read presents after completion")
+    count = struct.unpack("<I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d5a, 0xffff, 4, timeout=2000)))[0]
+    assert count <= 2048
+    fields = ("scenario", "render_us", "transfer_us", "total_us", "period_us", "dirty_pixels", "state_changed", "elapsed_us", "state_us", "js_us", "native_us", "damage_us", "raster_us", "commit_us")
+    result["presents"] = []
+    for index in range(count):
+        data = bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d5a, index, 56, timeout=2000))
+        assert len(data) in (32, 56), len(data)
+        result["presents"].append(dict(zip(fields, struct.unpack(f"<{len(data) // 4}I", data))))
+if args.accelerator:
+    count = struct.unpack("<I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d5b, 0xffff, 4, timeout=2000)))[0]
+    assert count <= 32
+    names = ("width", "height", "cpu_us", "hardware_us", "setup_us", "wait_us", "finish_us", "mismatches", "error", "samples", "actual", "expected", "kind")
+    result["accelerator"] = []
+    for i in range(count):
+        data = bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d5b, i, 52, timeout=2000))
+        assert len(data) in (40, 48, 52)
+        result["accelerator"].append(dict(zip(names, struct.unpack(f"<{len(data) // 4}I", data))))
 if args.output:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2)+"\n")
-print(json.dumps({k:v for k,v in result.items() if k not in ("log", "fixtures")}))
+print(json.dumps({k:v for k,v in result.items() if k not in ("log", "fixtures", "presents")}))
 print(result["log"])
