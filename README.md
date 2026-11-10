@@ -106,8 +106,8 @@ region is now used explicitly rather than leaving it empty.
 | --- | --- | --- |
 | Controller, RTOS and newlib C heap | Internal SRAM: reclaimed + ordinary | 64 + 8 = 72 KiB |
 | UI executor stack | Ordinary internal SRAM | 192 KiB, including a 128 KiB JS stack limit |
-| SPI DMA buffers | Ordinary internal SRAM | 2 × 30 KiB |
-| QuickJS interpreter and 17 VM helpers | Ordinary internal SRAM | About 36 KiB with `-O2`; remaining engine code stays in flash |
+| SPI DMA buffers | Ordinary internal SRAM | 2 × 28 KiB |
+| QuickJS interpreter and hot VM helpers | Ordinary internal SRAM | About 38.5 KiB with `-O2`; remaining engine code stays in flash |
 | Core 0 stack | Remaining ordinary SRAM | See the linked ELF memory report |
 | Panel wire framebuffer | PSRAM prefix | 450 KiB |
 | Rust UI, QuickJS allocations and retained UI framebuffer | PSRAM GUI heap | Remaining PSRAM; JS engine heap limit 4 MiB |
@@ -188,16 +188,39 @@ memory report before flashing a different compiler configuration.
 - [`src/state.rs`](src/state.rs): typed state copied directly into JS values, without JSON parsing or evaluating key labels as code.
 - [`firmware/esp32s31/src/display`](firmware/esp32s31/src/display): RMK event folding and presentation.
 - PocketJS: `becc0e21b678384ec31efa2b4f8d0be3aeefad5f`.
-- QuickJS-NG: v0.14.0, `3c051980ab7e783dfbfb1c70c014ce5e05ecf24c`.
-- RMK: `e9f242b40856b857b25f160949f8c31283f35441` plus
+- QuickJS-NG: `d8e1cc68f71fba2e084a18408ab2e6f9838b4d20` (includes upstream immutable-buffer and newlib fixes).
+- RMK: upstream merge `c7195de6fe994da3651fdc20ee358ca4e69de11d` plus
   [`rmk-dongle-state.patch`](patches/rmk-dongle-state.patch).
-- ESP stack: `163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde`.
+- ESP stack: `esp-rs/esp-hal` upstream merge `c38ad27aa5e0894f3447624b63463c9e7d5c1e95`.
+- ESP PAC: `5cb8c50`, matching the ESP HAL revision, including the optional PPA backend.
 - C toolchain: Espressif `esp-16.1.0_20260609`, `rv32imafc` / `ilp32f`.
 
-The [QuickJS patch](patches/quickjs-port.patch) fixes newlib `int32_t` pointer
-compatibility, preserves PocketJS's immutable package-buffer contract, and puts
-the S31 interpreter and property, array and object-lifecycle helpers in SRAM. `POCKETJS_QJS_IRAM=0` builds a flash-execution
-control for comparison.
+Merged platform changes come from official repositories: RMK's ESP32-S31
+support ([#1393](https://github.com/rmk-rs/rmk/pull/1393)) and the ESP USB RX FIFO
+fix ([#6615](https://github.com/esp-rs/esp-hal/pull/6615)) need no local support
+branch. Pins identify reproducible upstream commits rather than moving branches.
+RMK's local Cargo override contains only the retained dongle-state event patch.
+
+The remaining patches have separate ownership:
+
+| Patch | Scope | Upstream preparation |
+| --- | --- | --- |
+| `pocketjs-style-lookup.patch` | Exact class lookup and style-table revision | General PocketJS optimization |
+| `pocketjs-display-runtime.patch` | Native Solid bindings and pending-work scheduling | General PocketJS optimization |
+| `pocketjs-native-execution.patch` | Layout, command replay, damage, raster and ABI paths | Split by subsystem for PocketJS review |
+| `pocketjs-quickjs-compat.patch` | Borrowed package buffers with the QuickJS-NG 0.16+ C API | General guest SDK compatibility |
+| `rmk-dongle-state.patch` | Retain connection state for late display subscribers | Independent RMK event fix |
+| `quickjs-iram.patch` | Put interpreter and hot helpers in SRAM | Mosaico-specific placement policy |
+| `pocketjs-profiler.patch` | Optional guest native-op timing hooks | Local measurement integration |
+
+QuickJS-NG's upstream commits `249bb27` and `eb52863` provide immutable
+TypedArray and ArrayBuffer semantics; [#1657](https://github.com/quickjs-ng/quickjs/pull/1657)
+fixes the newlib `int32_t` pointer mismatches. These duplicate local changes were
+removed, including `quickjs-port.patch`. In QuickJS itself, only the board-specific
+[SRAM placement patch](patches/quickjs-iram.patch) remains. The separate
+[PocketJS guest patch](patches/pocketjs-quickjs-compat.patch) adapts the new external
+ArrayBuffer API and retains the older API path.
+`POCKETJS_QJS_IRAM=0` builds a flash-execution control for comparison.
 
 The [native-execution patch](patches/pocketjs-native-execution.patch) tracks paint mutations
 and replays unchanged small view/text groups. It retains at most 512 node slots

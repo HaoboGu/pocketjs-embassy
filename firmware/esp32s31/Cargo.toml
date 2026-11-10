@@ -24,9 +24,9 @@ bench = false
 pocket-raster = { path = "../../.deps/pocketjs/engine/raster", optional = true }
 pocket-render = { path = "../../.deps/pocketjs/engine/render" }
 pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers", optional = true }
-esp32s31-pac = { package = "esp32s31", git = "https://github.com/esp-rs/esp-pacs.git", rev = "f7f79f2", optional = true }
+esp32s31-pac = { package = "esp32s31", git = "https://github.com/esp-rs/esp-pacs.git", rev = "5cb8c50", optional = true }
 pocketjs-embassy = { path = "../.." }
-rmk = { path = "../../.deps/rmk/rmk", default-features = false, features = [
+rmk = { git = "https://github.com/rmk-rs/rmk", rev = "c7195de6fe994da3651fdc20ee358ca4e69de11d", default-features = false, features = [
     "esp32s31_ble",
     "log",
     "storage",
@@ -59,16 +59,16 @@ opt-level = "s"
 [profile.dev.package.esp-storage]
 opt-level = 3
 
-# Includes S31 BLE, MPLL/PSRAM calibration, and USB HS RX FIFO sizing fixes.
+# Official upstream merge of esp-rs/esp-hal#6615; keep the ESP crates on one revision.
 [patch.crates-io]
-esp-hal = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-alloc = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-backtrace = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-bootloader-esp-idf = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-println = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-radio = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-rtos = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
-esp-storage = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-println = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-radio = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal", rev = "c38ad27aa5e0894f3447624b63463c9e7d5c1e95" }
 
 [profile.release]
 codegen-units = 1
@@ -85,3 +85,7 @@ pocketjs-core = { path = "../../.deps/pocketjs/engine/core" }
 pocket-spec = { path = "../../.deps/pocketjs/engine/spec" }
 pocket-package = { path = "../../.deps/pocketjs/engine/package" }
 pocket-media = { path = "../../.deps/pocketjs/engine/modules/media" }
+
+# Only the unmerged retained dongle-state event is patched locally.
+[patch."https://github.com/rmk-rs/rmk"]
+rmk = { path = "../../.deps/rmk/rmk" }

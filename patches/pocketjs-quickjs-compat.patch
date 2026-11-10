@@ -1,0 +1,25 @@
+diff --git a/engine/guest-quickjs/src/guest.c b/engine/guest-quickjs/src/guest.c
+--- a/engine/guest-quickjs/src/guest.c
++++ b/engine/guest-quickjs/src/guest.c
+@@ -187,12 +187,21 @@
+ }
+ static int set(JSContext *ctx,JSValueConst object,const char *name,JSValue value) { return JS_DefinePropertyValueStr(ctx,object,name,value,JS_PROP_C_W_E); }
+ static JSValue viewport(JSContext *ctx,uint32_t width,uint32_t height) {JSValue value=JS_NewObject(ctx);if(set(ctx,value,"w",JS_NewUint32(ctx,width))<0||set(ctx,value,"h",JS_NewUint32(ctx,height))<0){JS_FreeValue(ctx,value);return JS_EXCEPTION;}return value;}
++#if defined(QJS_VERSION_MAJOR) && (QJS_VERSION_MAJOR > 0 || QJS_VERSION_MINOR >= 16)
++#define HAS_RESIZABLE_ARRAYBUFFER_API 1
++#else
++#define HAS_RESIZABLE_ARRAYBUFFER_API 0
+ static void borrowed_free(JSRuntime *rt,void *opaque,void *ptr) {(void)rt;(void)opaque;(void)ptr;}
++#endif
+ static JSValue package_buffer(JSContext *ctx,const pocket_guest_environment *env) {
+   /* Package storage stays valid through shutdown, which detaches this buffer,
+    * so canonical/IDF guests borrow the bytes in place. QuickJS-NG refuses JS
+    * writes and transfer() through the immutable flag. */
++#if HAS_RESIZABLE_ARRAYBUFFER_API
++  JSValue pak=JS_NewArrayBuffer(ctx,(uint8_t*)env->pak,env->pak_length,0,NULL,NULL,false);
++#else
+   JSValue pak=JS_NewArrayBuffer(ctx,(uint8_t*)env->pak,env->pak_length,borrowed_free,NULL,false);
++#endif
+ #if !defined(POCKET_QJS_BELLARD) && (defined(__GNUC__) || defined(POCKET_QJS_IMMUTABLE_API))
+   if(!JS_IsException(pak)&&HAS_IMMUTABLE_API&&JS_SetImmutableArrayBuffer(pak,true)<0){JS_FreeValue(ctx,pak);return JS_ThrowInternalError(ctx,"cannot protect package buffer");}
+ #endif

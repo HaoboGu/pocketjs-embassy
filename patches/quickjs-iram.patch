@@ -1,0 +1,161 @@
+diff --git a/quickjs.c b/quickjs.c
+index 8397a25..87b9e04 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -48,6 +48,12 @@
+ #include "libregexp.h"
+ #include "dtoa.h"
+ 
++#ifdef POCKET_QJS_IRAM
++#define POCKET_QJS_HOT __attribute__((section(".rwtext")))
++#else
++#define POCKET_QJS_HOT
++#endif
++
+ #if defined(EMSCRIPTEN) || defined(_MSC_VER)
+ #define DIRECT_DISPATCH  0
+ #else
+@@ -2004,6 +2010,7 @@ void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
+     return ptr;
+ }
+ 
++POCKET_QJS_HOT
+ void *js_malloc_rt(JSRuntime *rt, size_t size)
+ {
+     void *ptr;
+@@ -2027,6 +2034,7 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
+     return ptr;
+ }
+ 
++POCKET_QJS_HOT
+ void js_free_rt(JSRuntime *rt, void *ptr)
+ {
+     JSMallocState *s;
+@@ -6125,6 +6133,7 @@ static __maybe_unused void JS_DumpShapes(JSRuntime *rt)
+ 
+ /* 'props[]' is used to initialized the object properties. The number
+    of elements depends on the shape. */
++POCKET_QJS_HOT
+ static JSValue JS_NewObjectFromShape(JSContext *ctx, JSShape *sh, JSClassID class_id,
+                                      JSProperty *props)
+ {
+@@ -6245,6 +6254,7 @@ static JSValue JS_NewObjectFromShape(JSContext *ctx, JSShape *sh, JSClassID clas
+ }
+ 
+ /* WARNING: proto must be an object or JS_NULL */
++POCKET_QJS_HOT
+ JSValue JS_NewObjectProtoClass(JSContext *ctx, JSValueConst proto_val,
+                                JSClassID class_id)
+ {
+@@ -6265,6 +6275,7 @@ JSValue JS_NewObjectProtoClass(JSContext *ctx, JSValueConst proto_val,
+ 
+ /* WARNING: the shape is not hashed. It is used for objects where
+    factorizing the shape is not relevant (prototypes, constructors) */
++POCKET_QJS_HOT
+ static JSValue JS_NewObjectProtoClassAlloc(JSContext *ctx, JSValueConst proto_val,
+                                            JSClassID class_id, int n_alloc_props)
+ {
+@@ -6584,6 +6595,7 @@ static void js_c_function_data_mark(JSRuntime *rt, JSValueConst val,
+     }
+ }
+ 
++POCKET_QJS_HOT
+ static JSValue js_call_c_function_data(JSContext *ctx, JSValueConst func_obj,
+                                        JSValueConst this_val,
+                                        int argc, JSValueConst *argv, int flags)
+@@ -6825,6 +6837,7 @@ static inline JSShapeProperty *find_own_property1(JSObject *p, JSAtom atom)
+     return NULL;
+ }
+ 
++POCKET_QJS_HOT
+ static inline JSShapeProperty *find_own_property(JSProperty **ppr,
+                                                  JSObject *p,
+                                                  JSAtom atom)
+@@ -7118,6 +7131,7 @@ static void free_zero_refcount(JSRuntime *rt)
+ }
+ 
+ /* called with the ref_count of 'v' reaches zero. */
++POCKET_QJS_HOT
+ static void js_free_value_rt(JSRuntime *rt, JSValue v)
+ {
+     uint32_t tag = JS_VALUE_GET_TAG(v);
+@@ -7184,6 +7198,7 @@ static void js_free_value_rt(JSRuntime *rt, JSValue v)
+     }
+ }
+ 
++POCKET_QJS_HOT
+ void JS_FreeValueRT(JSRuntime *rt, JSValue v)
+ {
+     if (JS_VALUE_HAS_REF_COUNT(v)) {
+@@ -7194,6 +7209,7 @@ void JS_FreeValueRT(JSRuntime *rt, JSValue v)
+     }
+ }
+ 
++POCKET_QJS_HOT
+ void JS_FreeValue(JSContext *ctx, JSValue v)
+ {
+     JS_FreeValueRT(ctx->rt, v);
+@@ -9095,6 +9111,7 @@ static int JS_AutoInitProperty(JSContext *ctx, JSObject *p, JSAtom prop,
+     return 0;
+ }
+ 
++POCKET_QJS_HOT
+ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
+                                       JSAtom prop, JSValueConst this_obj,
+                                       bool throw_ref_error)
+@@ -9945,6 +9962,7 @@ JSAtom JS_ValueToAtom(JSContext *ctx, JSValueConst val)
+     return JS_ValueToAtomInternal(ctx, val, /*flags*/0);
+ }
+ 
++POCKET_QJS_HOT
+ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
+                                       uint32_t idx, JSValue *pval)
+ {
+@@ -10008,6 +10026,7 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
+     }
+ }
+ 
++POCKET_QJS_HOT
+ static JSValue JS_GetPropertyValue(JSContext *ctx, JSValueConst this_obj,
+                                    JSValue prop)
+ {
+@@ -10527,6 +10546,7 @@ static void js_free_desc(JSContext *ctx, JSPropertyDescriptor *desc)
+    the new property is not added and an error is raised.
+    'obj' must be an object when obj != this_obj.
+    */
++POCKET_QJS_HOT
+ static int JS_SetPropertyInternal2(JSContext *ctx, JSValueConst obj, JSAtom prop,
+                                    JSValue val, JSValueConst this_obj, int flags)
+ {
+@@ -12232,6 +12252,7 @@ static inline bool JS_IsHTMLDDA(JSContext *ctx, JSValueConst obj)
+     return p->is_HTMLDDA;
+ }
+ 
++POCKET_QJS_HOT
+ static int JS_ToBoolFree(JSContext *ctx, JSValue val)
+ {
+     uint32_t tag = JS_VALUE_GET_TAG(val);
+@@ -14309,6 +14330,7 @@ int JS_ToInt64Ext(JSContext *ctx, int64_t *pres, JSValueConst val)
+ }
+ 
+ /* return (<0, 0) in case of exception */
++POCKET_QJS_HOT
+ static int JS_ToInt32Free(JSContext *ctx, int32_t *pres, JSValue val)
+ {
+     uint32_t tag;
+@@ -17836,6 +17858,7 @@ static void close_lexical_var(JSContext *ctx, JSFunctionBytecode *b,
+ #define JS_CALL_FLAG_COPY_ARGV   (1 << 1)
+ #define JS_CALL_FLAG_GENERATOR   (1 << 2)
+ 
++POCKET_QJS_HOT
+ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
+                                   JSValueConst this_obj,
+                                   int argc, JSValueConst *argv, int flags)
+@@ -18028,6 +18051,7 @@ static bool needs_backtrace(JSValue exc)
+ }
+ 
+ /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
++POCKET_QJS_HOT
+ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                                JSValueConst this_obj, JSValueConst new_target,
+                                int argc, JSValueConst *argv, int flags)

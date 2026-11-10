@@ -19,8 +19,8 @@ use esp_hal::{Async, dma_rx_buffer, dma_tx_buffer};
 pub const SCREEN_W: usize = 480;
 pub const SCREEN_H: usize = 480;
 const PIXELS: usize = SCREEN_W * SCREEN_H;
-// Keep each transfer below esp-hal's 32,736-byte DMA limit.
-const DMA_CHUNK: usize = 30 * 1024;
+// Stay below esp-hal's DMA limit while leaving SRAM for the Core 0 stack.
+const DMA_CHUNK: usize = 28 * 1024;
 
 pub struct DisplayPeripherals {
     pub spi2: SPI2<'static>,

@@ -7,24 +7,24 @@ if [[ ! -d .deps/pocketjs/.git ]]; then
     git clone --filter=blob:none --no-checkout https://github.com/pocket-nexus/pocketjs .deps/pocketjs
 fi
 git -C .deps/pocketjs checkout becc0e21b678384ec31efa2b4f8d0be3aeefad5f
-for patch in pocketjs-style-lookup.patch pocketjs-profiler.patch pocketjs-display-runtime.patch pocketjs-native-execution.patch; do
+for patch in pocketjs-style-lookup.patch pocketjs-profiler.patch pocketjs-display-runtime.patch pocketjs-native-execution.patch pocketjs-quickjs-compat.patch; do
     if ! git -C .deps/pocketjs apply --reverse --check "$repo_root/patches/$patch" 2>/dev/null; then
         git -C .deps/pocketjs apply "$repo_root/patches/$patch"
     fi
 done
 if [[ ! -d .deps/quickjs/.git ]]; then
-    git clone --depth 1 --branch v0.14.0 https://github.com/quickjs-ng/quickjs .deps/quickjs
+    git clone --filter=blob:none --no-checkout https://github.com/quickjs-ng/quickjs .deps/quickjs
 fi
-test "$(git -C .deps/quickjs rev-parse HEAD)" = 3c051980ab7e783dfbfb1c70c014ce5e05ecf24c
-if git -C .deps/quickjs apply --reverse --check "$repo_root/patches/quickjs-port.patch" 2>/dev/null; then
-    :
-else
-    git -C .deps/quickjs apply "$repo_root/patches/quickjs-port.patch"
+git -C .deps/quickjs fetch https://github.com/quickjs-ng/quickjs d8e1cc68f71fba2e084a18408ab2e6f9838b4d20
+git -C .deps/quickjs checkout --detach d8e1cc68f71fba2e084a18408ab2e6f9838b4d20
+if ! git -C .deps/quickjs apply --reverse --check "$repo_root/patches/quickjs-iram.patch" 2>/dev/null; then
+    git -C .deps/quickjs apply "$repo_root/patches/quickjs-iram.patch"
 fi
 if [[ ! -d .deps/rmk/.git ]]; then
     git clone --filter=blob:none --no-checkout https://github.com/rmk-rs/rmk .deps/rmk
 fi
-git -C .deps/rmk checkout e9f242b40856b857b25f160949f8c31283f35441
+git -C .deps/rmk fetch https://github.com/rmk-rs/rmk c7195de6fe994da3651fdc20ee358ca4e69de11d
+git -C .deps/rmk checkout --detach c7195de6fe994da3651fdc20ee358ca4e69de11d
 if ! git -C .deps/rmk apply --reverse --check "$repo_root/patches/rmk-dongle-state.patch" 2>/dev/null; then
     git -C .deps/rmk apply "$repo_root/patches/rmk-dongle-state.patch"
 fi
