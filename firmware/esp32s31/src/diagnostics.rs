@@ -5,7 +5,7 @@ use core::{
 };
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 
-const TRACE_CAPACITY: usize = 768;
+const TRACE_CAPACITY: usize = 512;
 
 struct Trace {
     bytes: [u8; TRACE_CAPACITY],
