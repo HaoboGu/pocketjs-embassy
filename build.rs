@@ -16,8 +16,7 @@ fn main() {
         .compiler(toolchain.join("riscv32-esp-elf-gcc"))
         .archiver(toolchain.join("riscv32-esp-elf-ar"))
         .opt_level(2)
-        .flag("-mabi=ilp32f")
-        .define("POCKET_EMBEDDED", None);
+        .flag("-mabi=ilp32f");
     for library in ["libc.a", "libgcc.a"] {
         let output = Command::new(toolchain.join("riscv32-esp-elf-gcc"))
             .args([

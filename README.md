@@ -306,13 +306,12 @@ The remaining patches have separate ownership:
 | --- | --- | --- |
 | `pocketjs-style-lookup.patch` | Exact class lookup and style-table revision | General PocketJS optimization |
 | `pocketjs-display-runtime.patch` | Native Solid bindings and pending-work scheduling | General PocketJS optimization |
-| `pocketjs-native-execution.patch` | Layout, command replay, damage, raster and ABI paths | Split by subsystem for PocketJS review |
+| `pocketjs-native-execution.patch` | Layout, command replay, damage, raster and native dispatch | Split by subsystem for PocketJS review |
 | `rmk-dongle-state.patch` | Retain connection state for late display subscribers | Independent RMK event fix |
 
 The engine comes from Cargo's rquickjs release; setup no longer fetches, rewrites
 or patches QuickJS. SRAM placement is a board linker policy. Optional diagnostics
-measure the state bridge, complete guest turn, rendering and DMA stages; the removed
-C guest's internal timing slots are not populated by the Rust guest.
+measure the state bridge, complete guest turn, rendering and DMA stages.
 
 The [native-execution patch](patches/pocketjs-native-execution.patch) tracks paint mutations
 and replays unchanged small view/text groups. It retains at most 512 node slots
@@ -324,9 +323,7 @@ the UI pixel reference uses a separate uncached traversal.
 The same patch places eligible absolute leaves from their parent geometry without
 running the flex solver. Percentages, margins, min/max constraints, flow layout,
 native/streamed text and explicit layout regions keep the general path. Text
-remeasurement retains solver results when its dimensions are unchanged. The patch
-also contains C ABI argument-decoding optimizations that the current rquickjs
-embedding does not use; separate those changes before upstream submission.
+remeasurement retains solver results when its dimensions are unchanged.
 Damage planning retains
 decoded operations without searching for pixel moves that this display would repaint.
 A row index selects commands intersecting each dirty region. An opaque rectangle

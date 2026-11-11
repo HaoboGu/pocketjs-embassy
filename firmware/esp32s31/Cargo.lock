@@ -2455,8 +2455,6 @@ dependencies = [
  "pocket-render",
  "pocket-runtime",
  "rquickjs",
- "serde",
- "serde_json",
 ]
 
 [[package]]

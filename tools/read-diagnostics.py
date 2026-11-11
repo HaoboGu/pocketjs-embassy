@@ -35,12 +35,15 @@ if args.profile:
     result["profile"] = dict(zip(("uptime_ms", "frames", "state_us", "js_us", "draw_us", "damage_us", "raster_us", "commit_us", "allocation_us", "allocation_calls"), fields))
     result["pipeline"] = dict(zip(("input_revision", "applied_revision", "snapshot_age_us", "apply_latency_us"),
         struct.unpack("<4I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d56, 0, 16, timeout=2000)))))
-    result["detail"] = dict(zip(("completed_us", "serialize_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us", "js_call_us", "jobs_us", "native_ops_us", "native_ops_count"), struct.unpack("<13I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d58, 0, 52, timeout=2000)))))
+    result["detail"] = dict(zip(("completed_us", "bridge_setup_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us"), struct.unpack("<13I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d58, 0, 52, timeout=2000)))))
 if args.fixtures:
     count = struct.unpack("<I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d59, 0xffff, 4, timeout=2000)))[0]
     assert count <= 32
-    fields = ("pressed", "total_us", "completed_us", "serialize_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us", "js_call_us", "jobs_us", "native_ops_us", "native_ops_count", "state_us", "js_us", "draw_us", "damage_us", "raster_us", "commit_us", "pixels_hash", "cycles")
-    result["fixtures"] = [dict(zip(fields, struct.unpack("<23I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d59, index, 92, timeout=2000))))) for index in range(count)]
+    fields = ("pressed", "total_us", "completed_us", "bridge_setup_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us", "state_us", "js_us", "draw_us", "damage_us", "raster_us", "commit_us", "pixels_hash", "cycles")
+    result["fixtures"] = []
+    for index in range(count):
+        words = struct.unpack("<23I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d59, index, 92, timeout=2000)))
+        result["fixtures"].append(dict(zip(fields, words[:11] + words[15:])))
 if args.presents:
     if "Full-frame benchmark complete" not in result["log"]:
         parser.error("frame benchmark is still running; read presents after completion")

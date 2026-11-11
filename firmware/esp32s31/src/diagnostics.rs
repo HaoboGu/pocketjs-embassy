@@ -200,6 +200,7 @@ pub fn read(value: u16, index: u16, out: &mut [u8]) -> usize {
     }
     if value == 0x4d58 {
         let fields = DETAIL.lock(|cell| cell.borrow().completed);
+        // QJD1 keeps four reserved words after the active measurements.
         let mut bytes = [0; 52];
         for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
             slot.copy_from_slice(&value.to_le_bytes());
@@ -320,29 +321,17 @@ pub fn benchmark_memory() {
 struct DetailProfile {
     bridge_last: u32,
     app_last: u32,
-    guest_last: u32,
-    guest_phase: u32,
     bridge: [u32; 4],
     app: [u32; 4],
-    js_call_us: u32,
-    jobs_us: u32,
-    native_us: u32,
-    native_calls: u32,
-    completed: [u32; 13],
+    completed: [u32; 9],
 }
 static DETAIL: Mutex<CriticalSectionRawMutex, RefCell<DetailProfile>> =
     Mutex::new(RefCell::new(DetailProfile {
         bridge_last: 0,
         app_last: 0,
-        guest_last: 0,
-        guest_phase: 0,
         bridge: [0; 4],
         app: [0; 4],
-        js_call_us: 0,
-        jobs_us: 0,
-        native_us: 0,
-        native_calls: 0,
-        completed: [0; 13],
+        completed: [0; 9],
     }));
 #[unsafe(no_mangle)]
 extern "C" fn pocket_bridge_phase(phase: u32) {
@@ -371,10 +360,6 @@ extern "C" fn pocket_bridge_phase(phase: u32) {
                 detail.app[1],
                 detail.app[2],
                 detail.app[3],
-                detail.js_call_us,
-                detail.jobs_us,
-                detail.native_us,
-                detail.native_calls,
             ];
         }
     });
@@ -393,36 +378,6 @@ extern "C" fn pocket_app_phase(phase: u32) {
         detail.app_last = now;
     });
 }
-#[unsafe(no_mangle)]
-extern "C" fn pocket_guest_phase(phase: u32) {
-    if !MEASURING.load(Ordering::Relaxed) {
-        return;
-    }
-    let now = embassy_time::Instant::now().as_micros() as u32;
-    DETAIL.lock(|cell| {
-        let mut detail = cell.borrow_mut();
-        let elapsed = now.wrapping_sub(detail.guest_last);
-        match detail.guest_phase {
-            2 => detail.js_call_us += elapsed,
-            3 => detail.jobs_us += elapsed,
-            _ => (),
-        }
-        detail.guest_phase = phase;
-        detail.guest_last = now;
-    });
-}
-#[unsafe(no_mangle)]
-extern "C" fn pocket_native_op(micros: u32) {
-    if !MEASURING.load(Ordering::Relaxed) {
-        return;
-    }
-    DETAIL.lock(|cell| {
-        let mut detail = cell.borrow_mut();
-        detail.native_us += micros;
-        detail.native_calls += 1;
-    });
-}
-
 #[cfg(not(feature = "frame-benchmark"))]
 struct Fixtures {
     used: usize,
@@ -454,7 +409,8 @@ pub fn report_detail(label: &str, total_us: u64, pixels_hash: u32, cycles: u32) 
             let row = &mut fixtures.rows[index];
             row[0] = u32::from(label == "key_down");
             row[1] = total_us as u32;
-            row[2..15].copy_from_slice(&values);
+            row[2..11].copy_from_slice(&values);
+            // QJD1 reserves words 11..15 for older diagnostic readers.
             row[15..21].copy_from_slice(&native);
             row[21] = pixels_hash;
             row[22] = cycles;
@@ -466,7 +422,7 @@ pub fn report_detail(label: &str, total_us: u64, pixels_hash: u32, cycles: u32) 
         return;
     }
     log::info!(
-        "Frame probe {} total={} serialize={} input={} guest={} status={} calc={} solid={} wake={} framework={} native_ops={} ops={}",
+        "Frame probe {} total={} bridge_setup={} input={} guest={} status={} calc={} solid={} wake={} framework={}",
         label,
         total_us,
         values[1],
@@ -476,19 +432,15 @@ pub fn report_detail(label: &str, total_us: u64, pixels_hash: u32, cycles: u32) 
         values[5],
         values[6],
         values[7],
-        values[8],
-        values[11],
-        values[12]
+        values[8]
     );
     log::info!(
-        "Frame native {} draw={} damage={} raster={} commit={} js_call={} jobs={}",
+        "Frame native {} draw={} damage={} raster={} commit={}",
         label,
         native[2],
         native[3],
         native[4],
-        native[5],
-        values[9],
-        values[10]
+        native[5]
     );
 }
 

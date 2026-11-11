@@ -64,7 +64,6 @@ fn draw_native(state: &mut pocket_runtime::CoreState, advance: bool) {
 
 #[derive(Debug)]
 pub enum Error {
-    Allocation,
     Runtime(RuntimeError),
     JavaScript(String),
 }

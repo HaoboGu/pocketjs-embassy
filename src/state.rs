@@ -1,6 +1,4 @@
-use serde::Serialize;
-
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Model {
     pub link: &'static str,
     pub usb: &'static str,
