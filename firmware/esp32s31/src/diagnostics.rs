@@ -1,7 +1,7 @@
 use core::{
     cell::RefCell,
     fmt::Write,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::atomic::{AtomicU32, Ordering},
 };
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 
@@ -15,16 +15,8 @@ static TRACE: Mutex<CriticalSectionRawMutex, RefCell<Trace>> = Mutex::new(RefCel
     bytes: [0; TRACE_CAPACITY],
     used: 0,
 }));
-pub static MEASURING: AtomicBool = AtomicBool::new(!cfg!(feature = "frame-benchmark"));
-pub static COARSE_MEASURING: AtomicBool = AtomicBool::new(false);
 pub static STAGE: AtomicU32 = AtomicU32::new(0);
 pub static FRAMES: AtomicU32 = AtomicU32::new(0);
-pub static ALLOC_CYCLES: AtomicU32 = AtomicU32::new(0);
-pub static ALLOC_CALLS: AtomicU32 = AtomicU32::new(0);
-pub static INPUT_REVISION: AtomicU32 = AtomicU32::new(0);
-pub static APPLIED_REVISION: AtomicU32 = AtomicU32::new(0);
-pub static SNAPSHOT_AGE_US: AtomicU32 = AtomicU32::new(0);
-pub static APPLY_LATENCY_US: AtomicU32 = AtomicU32::new(0);
 static PANICS: AtomicU32 = AtomicU32::new(0);
 pub struct TraceLogger;
 pub static LOGGER: TraceLogger = TraceLogger;
@@ -94,363 +86,47 @@ extern "Rust" fn custom_pre_backtrace() {
     append(line.as_bytes());
 }
 
+#[cfg(feature = "frame-benchmark")]
+extern crate alloc;
+#[cfg(feature = "frame-benchmark")]
+use core::sync::atomic::AtomicBool;
+
+#[cfg(feature = "frame-benchmark")]
+pub static MEASURING: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "frame-benchmark")]
 struct FrameProfile {
     last_us: u32,
     phases_us: [u32; 6],
-    completed_us: [u32; 6],
-    allocation_us: u32,
-    allocation_calls: u32,
 }
+#[cfg(feature = "frame-benchmark")]
 static PROFILE: Mutex<CriticalSectionRawMutex, RefCell<FrameProfile>> =
     Mutex::new(RefCell::new(FrameProfile {
         last_us: 0,
         phases_us: [0; 6],
-        completed_us: [0; 6],
-        allocation_us: 0,
-        allocation_calls: 0,
     }));
+#[cfg(feature = "frame-benchmark")]
+static PRESENTS: Mutex<CriticalSectionRawMutex, RefCell<alloc::vec::Vec<[u32; 14]>>> =
+    Mutex::new(RefCell::new(alloc::vec::Vec::new()));
 
+#[cfg(feature = "frame-benchmark")]
 #[unsafe(no_mangle)]
 extern "C" fn pocket_frame_phase(phase: u32) {
-    if !MEASURING.load(Ordering::Relaxed) && !COARSE_MEASURING.load(Ordering::Relaxed) {
+    if !MEASURING.load(Ordering::Relaxed) {
         return;
     }
     let now = embassy_time::Instant::now().as_micros() as u32;
-    if phase == 0 {
-        ALLOC_CYCLES.store(0, Ordering::Relaxed);
-        ALLOC_CALLS.store(0, Ordering::Relaxed);
-    }
     PROFILE.lock(|cell| {
         let mut profile = cell.borrow_mut();
         if phase != 0 {
             profile.phases_us[phase as usize - 1] = now.wrapping_sub(profile.last_us);
         }
         profile.last_us = now;
-        if phase == 6 {
-            profile.completed_us = profile.phases_us;
-            profile.allocation_us = ALLOC_CYCLES.load(Ordering::Relaxed)
-                / (esp_hal::clock::cpu_clock().as_hz() / 1_000_000);
-            profile.allocation_calls = ALLOC_CALLS.load(Ordering::Relaxed);
-        }
     });
 }
 
-pub fn read(value: u16, index: u16, out: &mut [u8]) -> usize {
-    #[cfg(feature = "ppa-probe")]
-    if value == 0x4d5b {
-        return crate::acceleration::read(index, out);
-    }
-    #[cfg(feature = "frame-benchmark")]
-    if value == 0x4d5a {
-        return PRESENTS.lock(|cell| {
-            let rows = cell.borrow();
-            if index == u16::MAX {
-                let bytes = (rows.len() as u32).to_le_bytes();
-                let length = out.len().min(4);
-                out[..length].copy_from_slice(&bytes[..length]);
-                return length;
-            }
-            let Some(row) = rows.get(usize::from(index)) else {
-                return 0;
-            };
-            let mut bytes = [0; 56];
-            for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(row) {
-                slot.copy_from_slice(&value.to_le_bytes());
-            }
-            let length = out.len().min(bytes.len());
-            out[..length].copy_from_slice(&bytes[..length]);
-            length
-        });
-    }
-    #[cfg(feature = "frame-benchmark")]
-    if value == 0x4d59 {
-        if index == u16::MAX {
-            let length = out.len().min(4);
-            out[..length].fill(0);
-            return length;
-        }
-        return 0;
-    }
-    #[cfg(not(feature = "frame-benchmark"))]
-    if value == 0x4d59 {
-        return FIXTURES.lock(|cell| {
-            let fixtures = cell.borrow();
-            if index == u16::MAX {
-                let bytes = (fixtures.used as u32).to_le_bytes();
-                let length = out.len().min(4);
-                out[..length].copy_from_slice(&bytes[..length]);
-                return length;
-            }
-            if usize::from(index) >= fixtures.used {
-                return 0;
-            }
-            let mut bytes = [0; 92];
-            for (slot, value) in bytes
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(fixtures.rows[usize::from(index)])
-            {
-                slot.copy_from_slice(&value.to_le_bytes());
-            }
-            let length = out.len().min(bytes.len());
-            out[..length].copy_from_slice(&bytes[..length]);
-            length
-        });
-    }
-    if value == 0x4d58 {
-        let fields = DETAIL.lock(|cell| cell.borrow().completed);
-        // QJD1 keeps four reserved words after the active measurements.
-        let mut bytes = [0; 52];
-        for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
-            slot.copy_from_slice(&value.to_le_bytes());
-        }
-        let length = out.len().min(bytes.len());
-        out[..length].copy_from_slice(&bytes[..length]);
-        length
-    } else if value == 0x4d56 {
-        let fields = [
-            INPUT_REVISION.load(Ordering::Relaxed),
-            APPLIED_REVISION.load(Ordering::Relaxed),
-            SNAPSHOT_AGE_US.load(Ordering::Relaxed),
-            APPLY_LATENCY_US.load(Ordering::Relaxed),
-        ];
-        let mut bytes = [0; 16];
-        for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
-            slot.copy_from_slice(&value.to_le_bytes());
-        }
-        let length = out.len().min(bytes.len());
-        out[..length].copy_from_slice(&bytes[..length]);
-        length
-    } else if value == 0x4d55 {
-        let fields = PROFILE.lock(|cell| {
-            let profile = cell.borrow();
-            let phases = profile.completed_us;
-            [
-                embassy_time::Instant::now().as_millis() as u32,
-                FRAMES.load(Ordering::Relaxed),
-                phases[0],
-                phases[1],
-                phases[2],
-                phases[3],
-                phases[4],
-                phases[5],
-                profile.allocation_us,
-                profile.allocation_calls,
-            ]
-        });
-        let mut bytes = [0; 40];
-        for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
-            slot.copy_from_slice(&value.to_le_bytes());
-        }
-        let length = out.len().min(bytes.len());
-        out[..length].copy_from_slice(&bytes[..length]);
-        length
-    } else if value == 0x4d53 {
-        let fields = [
-            u32::from_le_bytes(*b"QJD1"),
-            TRACE.lock(|cell| cell.borrow().used as u32),
-            PANICS.load(Ordering::Relaxed),
-            STAGE.load(Ordering::Relaxed),
-            FRAMES.load(Ordering::Relaxed),
-            esp_alloc::HEAP.free() as u32,
-            crate::allocation::GUI_HEAP.free() as u32,
-        ];
-        let mut bytes = [0; 28];
-        for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
-            slot.copy_from_slice(&value.to_le_bytes());
-        }
-        let length = out.len().min(bytes.len());
-        out[..length].copy_from_slice(&bytes[..length]);
-        length
-    } else {
-        TRACE.lock(|cell| {
-            let trace = cell.borrow();
-            let start = usize::from(index).min(trace.used);
-            let length = out.len().min(trace.used - start);
-            out[..length].copy_from_slice(&trace.bytes[start..start + length]);
-            length
-        })
-    }
-}
-
-pub fn benchmark_memory() {
-    use core::alloc::{GlobalAlloc, Layout};
-    let internal = [0x12345678u32; 256];
-    let layout = Layout::array::<u32>(internal.len()).unwrap();
-    let external = unsafe { crate::allocation::GUI_HEAP.alloc(layout) }.cast::<u32>();
-    assert!(!external.is_null());
-    unsafe {
-        external.copy_from_nonoverlapping(internal.as_ptr(), internal.len());
-    }
-    for (index, address) in [internal.as_ptr(), external.cast_const()]
-        .into_iter()
-        .enumerate()
-    {
-        let started = embassy_time::Instant::now();
-        let first_cycle: u32;
-        unsafe {
-            core::arch::asm!("csrr {0}, mcycle", out(reg) first_cycle);
-        }
-        let mut sum = 0u32;
-        for _ in 0..256 {
-            for offset in 0..internal.len() {
-                sum = sum.wrapping_add(unsafe { address.add(offset).read_volatile() });
-            }
-        }
-        let last_cycle: u32;
-        unsafe {
-            core::arch::asm!("csrr {0}, mcycle", out(reg) last_cycle);
-        }
-        let micros = started.elapsed().as_micros();
-        log::info!(
-            "Memory probe region={} address={:p} reads=65536 elapsed={}us cycles={} checksum={}",
-            index,
-            address,
-            micros,
-            last_cycle.wrapping_sub(first_cycle),
-            sum
-        );
-    }
-    unsafe {
-        crate::allocation::GUI_HEAP.dealloc(external.cast(), layout);
-    }
-}
-
-#[derive(Default)]
-struct DetailProfile {
-    bridge_last: u32,
-    app_last: u32,
-    bridge: [u32; 4],
-    app: [u32; 4],
-    completed: [u32; 9],
-}
-static DETAIL: Mutex<CriticalSectionRawMutex, RefCell<DetailProfile>> =
-    Mutex::new(RefCell::new(DetailProfile {
-        bridge_last: 0,
-        app_last: 0,
-        bridge: [0; 4],
-        app: [0; 4],
-        completed: [0; 9],
-    }));
-#[unsafe(no_mangle)]
-extern "C" fn pocket_bridge_phase(phase: u32) {
-    if !MEASURING.load(Ordering::Relaxed) {
-        return;
-    }
-    let now = embassy_time::Instant::now().as_micros() as u32;
-    DETAIL.lock(|cell| {
-        let mut detail = cell.borrow_mut();
-        if phase == 0 {
-            let completed = detail.completed;
-            *detail = DetailProfile::default();
-            detail.completed = completed;
-        } else {
-            detail.bridge[phase as usize - 1] = now.wrapping_sub(detail.bridge_last);
-        }
-        detail.bridge_last = now;
-        if phase == 4 {
-            detail.completed = [
-                now,
-                detail.bridge[0],
-                detail.bridge[1],
-                detail.bridge[2],
-                detail.bridge[3],
-                detail.app[0],
-                detail.app[1],
-                detail.app[2],
-                detail.app[3],
-            ];
-        }
-    });
-}
-#[unsafe(no_mangle)]
-extern "C" fn pocket_app_phase(phase: u32) {
-    if !MEASURING.load(Ordering::Relaxed) {
-        return;
-    }
-    let now = embassy_time::Instant::now().as_micros() as u32;
-    DETAIL.lock(|cell| {
-        let mut detail = cell.borrow_mut();
-        if phase != 0 && phase <= 4 {
-            detail.app[phase as usize - 1] = now.wrapping_sub(detail.app_last);
-        }
-        detail.app_last = now;
-    });
-}
-#[cfg(not(feature = "frame-benchmark"))]
-struct Fixtures {
-    used: usize,
-    rows: alloc::vec::Vec<[u32; 23]>,
-}
-#[cfg(not(feature = "frame-benchmark"))]
-static FIXTURES: Mutex<CriticalSectionRawMutex, RefCell<Fixtures>> =
-    Mutex::new(RefCell::new(Fixtures {
-        used: 0,
-        rows: alloc::vec::Vec::new(),
-    }));
-
-#[cfg(not(feature = "frame-benchmark"))]
-pub fn prepare_fixtures() {
-    let rows = alloc::vec![[0; 23]; 32];
-    FIXTURES.lock(|cell| {
-        *cell.borrow_mut() = Fixtures { used: 0, rows };
-    });
-}
-
-#[cfg(not(feature = "frame-benchmark"))]
-pub fn report_detail(label: &str, total_us: u64, pixels_hash: u32, cycles: u32) {
-    let values = DETAIL.lock(|cell| cell.borrow().completed);
-    let native = PROFILE.lock(|cell| cell.borrow().completed_us);
-    let index = FIXTURES.lock(|cell| {
-        let mut fixtures = cell.borrow_mut();
-        let index = fixtures.used;
-        if index < fixtures.rows.len() {
-            let row = &mut fixtures.rows[index];
-            row[0] = u32::from(label == "key_down");
-            row[1] = total_us as u32;
-            row[2..11].copy_from_slice(&values);
-            // QJD1 reserves words 11..15 for older diagnostic readers.
-            row[15..21].copy_from_slice(&native);
-            row[21] = pixels_hash;
-            row[22] = cycles;
-            fixtures.used += 1;
-        }
-        index
-    });
-    if index >= 6 {
-        return;
-    }
-    log::info!(
-        "Frame probe {} total={} bridge_setup={} input={} guest={} status={} calc={} solid={} wake={} framework={}",
-        label,
-        total_us,
-        values[1],
-        values[2],
-        values[3],
-        values[4],
-        values[5],
-        values[6],
-        values[7],
-        values[8]
-    );
-    log::info!(
-        "Frame native {} draw={} damage={} raster={} commit={}",
-        label,
-        native[2],
-        native[3],
-        native[4],
-        native[5]
-    );
-}
-
-extern crate alloc;
-#[cfg(feature = "frame-benchmark")]
-static PRESENTS: Mutex<CriticalSectionRawMutex, RefCell<alloc::vec::Vec<[u32; 14]>>> =
-    Mutex::new(RefCell::new(alloc::vec::Vec::new()));
 #[cfg(feature = "frame-benchmark")]
 pub fn record_present(row: [u32; 8]) {
-    let phases = PROFILE.lock(|cell| cell.borrow().completed_us);
+    let phases = PROFILE.lock(|cell| cell.borrow().phases_us);
     let mut complete = [0; 14];
     complete[..8].copy_from_slice(&row);
     complete[8..].copy_from_slice(&phases);
@@ -465,4 +141,55 @@ pub fn prepare_presents() {
         4 * 192
     });
     PRESENTS.lock(|cell| *cell.borrow_mut() = rows);
+}
+
+pub fn read(value: u16, index: u16, out: &mut [u8]) -> Option<usize> {
+    match value {
+        0x4d53 => {
+            let fields = [
+                u32::from_le_bytes(*b"QJD1"),
+                TRACE.lock(|cell| cell.borrow().used as u32),
+                PANICS.load(Ordering::Relaxed),
+                STAGE.load(Ordering::Relaxed),
+                FRAMES.load(Ordering::Relaxed),
+                esp_alloc::HEAP.free() as u32,
+                crate::allocation::GUI_HEAP.free() as u32,
+            ];
+            let mut bytes = [0; 28];
+            for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
+                slot.copy_from_slice(&value.to_le_bytes());
+            }
+            let length = out.len().min(bytes.len());
+            out[..length].copy_from_slice(&bytes[..length]);
+            Some(length)
+        }
+        0x4d54 => TRACE.lock(|cell| {
+            let trace = cell.borrow();
+            let start = usize::from(index).min(trace.used);
+            let length = out.len().min(trace.used - start);
+            out[..length].copy_from_slice(&trace.bytes[start..start + length]);
+            Some(length)
+        }),
+        #[cfg(feature = "frame-benchmark")]
+        0x4d5a => PRESENTS.lock(|cell| {
+            let rows = cell.borrow();
+            if index == u16::MAX {
+                let bytes = (rows.len() as u32).to_le_bytes();
+                let length = out.len().min(4);
+                out[..length].copy_from_slice(&bytes[..length]);
+                return Some(length);
+            }
+            let row = rows.get(usize::from(index))?;
+            let mut bytes = [0; 56];
+            for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(row) {
+                slot.copy_from_slice(&value.to_le_bytes());
+            }
+            let length = out.len().min(bytes.len());
+            out[..length].copy_from_slice(&bytes[..length]);
+            Some(length)
+        }),
+        #[cfg(feature = "ppa-probe")]
+        0x4d5b => Some(crate::acceleration::read(index, out)),
+        _ => None,
+    }
 }

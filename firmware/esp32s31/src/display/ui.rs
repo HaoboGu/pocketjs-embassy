@@ -29,107 +29,6 @@ pub struct Ui {
 impl Ui {
     pub fn new() -> Result<Self, pocketjs_embassy::Error> {
         let scene = JsUi::new()?;
-        #[cfg(all(feature = "usb-diagnostics", not(feature = "frame-benchmark")))]
-        let scene = {
-            crate::diagnostics::prepare_fixtures();
-            let mut scene = scene;
-            for (name, source) in [
-                (
-                    "arithmetic",
-                    "(()=>{let x=0;for(let i=0;i<10000;i++)x+=i;globalThis.__probe=x})()",
-                ),
-                (
-                    "properties",
-                    "(()=>{let x=0,o={a:1,b:2};for(let i=0;i<10000;i++)x+=o.a+o.b;globalThis.__probe=x})()",
-                ),
-                (
-                    "calls",
-                    "(()=>{let x=0;const f=v=>v+1;for(let i=0;i<1000;i++)x=f(x);globalThis.__probe=x})()",
-                ),
-                (
-                    "native_queries",
-                    "(()=>{let x=0;for(let i=0;i<100;i++)x+=ui.measureText('M',2);globalThis.__probe=x})()",
-                ),
-            ] {
-                use core::sync::atomic::Ordering;
-                crate::diagnostics::ALLOC_CYCLES.store(0, Ordering::Relaxed);
-                crate::diagnostics::ALLOC_CALLS.store(0, Ordering::Relaxed);
-                let started = Instant::now();
-                scene.evaluate(source.as_bytes())?;
-                log::info!(
-                    "Runtime probe {} elapsed={}us allocation={}us alloc_calls={}",
-                    name,
-                    started.elapsed().as_micros(),
-                    crate::diagnostics::ALLOC_CYCLES.load(Ordering::Relaxed)
-                        / (esp_hal::clock::cpu_clock().as_hz() / 1_000_000),
-                    crate::diagnostics::ALLOC_CALLS.load(Ordering::Relaxed)
-                );
-            }
-            scene.evaluate(b"delete globalThis.__probe")?;
-            let mut model = Model {
-                link: "Connected",
-                usb: "Ready",
-                battery_left: 85,
-                battery_right: 72,
-                ..Model::default()
-            };
-            let mut logical_us =
-                (Instant::now().as_micros() / 1_000_000).saturating_sub(1) * 1_000_000;
-            scene.frame(model.clone(), logical_us, true)?;
-            for _ in 0..13 {
-                model.key_labels[0].push_str("A").unwrap();
-                model.presses = model.presses.wrapping_add(1);
-                logical_us += 80_000;
-                let started = Instant::now();
-                let first_cycle: u32;
-                unsafe {
-                    core::arch::asm!("csrr {0}, mcycle", out(reg) first_cycle);
-                }
-                scene.frame(model.clone(), logical_us, false)?;
-                let last_cycle: u32;
-                unsafe {
-                    core::arch::asm!("csrr {0}, mcycle", out(reg) last_cycle);
-                }
-                let elapsed = started.elapsed().as_micros();
-                let hash = scene.pixels().iter().fold(0x811c9dc5u32, |hash, pixel| {
-                    (hash ^ u32::from(*pixel)).wrapping_mul(0x01000193)
-                });
-                crate::diagnostics::report_detail(
-                    "key_down",
-                    elapsed,
-                    hash,
-                    last_cycle.wrapping_sub(first_cycle),
-                );
-                model.key_labels[0].clear();
-                logical_us += 80_000;
-                let started = Instant::now();
-                let first_cycle: u32;
-                unsafe {
-                    core::arch::asm!("csrr {0}, mcycle", out(reg) first_cycle);
-                }
-                scene.frame(model.clone(), logical_us, false)?;
-                let last_cycle: u32;
-                unsafe {
-                    core::arch::asm!("csrr {0}, mcycle", out(reg) last_cycle);
-                }
-                let elapsed = started.elapsed().as_micros();
-                let hash = scene.pixels().iter().fold(0x811c9dc5u32, |hash, pixel| {
-                    (hash ^ u32::from(*pixel)).wrapping_mul(0x01000193)
-                });
-                crate::diagnostics::report_detail(
-                    "key_up",
-                    elapsed,
-                    hash,
-                    last_cycle.wrapping_sub(first_cycle),
-                );
-            }
-            while Instant::now().as_micros() < logical_us {
-                core::hint::spin_loop();
-            }
-            scene.evaluate(b"delete globalThis.__pocketProfile")?;
-            crate::diagnostics::MEASURING.store(false, core::sync::atomic::Ordering::Relaxed);
-            scene
-        };
         #[cfg(feature = "usb-diagnostics")]
         crate::diagnostics::STAGE.store(3, core::sync::atomic::Ordering::Relaxed);
         Ok(Self {
@@ -163,9 +62,7 @@ impl Ui {
 
     #[cfg(feature = "frame-benchmark")]
     pub async fn benchmark(&mut self, panel: &mut Panel) -> Result<(), pocketjs_embassy::Error> {
-        crate::diagnostics::MEASURING.store(false, core::sync::atomic::Ordering::Relaxed);
-        self.scene.evaluate(b"delete globalThis.__pocketProfile")?;
-        crate::diagnostics::COARSE_MEASURING.store(true, core::sync::atomic::Ordering::Relaxed);
+        crate::diagnostics::MEASURING.store(true, core::sync::atomic::Ordering::Relaxed);
         crate::diagnostics::prepare_presents();
         for scenario in 0..if cfg!(feature = "ppa-render") {
             8u32
@@ -281,9 +178,8 @@ impl Ui {
                 self.accelerator.verified_frames
             );
         }
-        log::info!("Draw cache info {:?}", self.scene.cache_info());
-        crate::diagnostics::COARSE_MEASURING.store(false, core::sync::atomic::Ordering::Relaxed);
-        log::info!("Full-frame benchmark complete; detailed probes disabled");
+        crate::diagnostics::MEASURING.store(false, core::sync::atomic::Ordering::Relaxed);
+        log::info!("Full-frame benchmark complete");
         Ok(())
     }
     pub async fn wait(&self) {
@@ -432,24 +328,6 @@ impl Ui {
             if damage.is_some() {
                 crate::diagnostics::FRAMES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             }
-        }
-        #[cfg(feature = "usb-diagnostics")]
-        if !self.retry
-            && crate::diagnostics::APPLIED_REVISION.load(core::sync::atomic::Ordering::Relaxed)
-                != state.revision
-        {
-            crate::diagnostics::SNAPSHOT_AGE_US.store(
-                started.as_micros().saturating_sub(state.changed_at_us) as u32,
-                core::sync::atomic::Ordering::Relaxed,
-            );
-            crate::diagnostics::APPLY_LATENCY_US.store(
-                Instant::now()
-                    .as_micros()
-                    .saturating_sub(state.changed_at_us) as u32,
-                core::sync::atomic::Ordering::Relaxed,
-            );
-            crate::diagnostics::APPLIED_REVISION
-                .store(state.revision, core::sync::atomic::Ordering::Relaxed);
         }
         if started.as_micros() - self.last_log_us >= 5_000_000 {
             self.last_log_us = started.as_micros();

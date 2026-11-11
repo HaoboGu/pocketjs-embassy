@@ -26,13 +26,12 @@ impl Handler for BootloaderHandler {
             if request.request_type != RequestType::Vendor
                 || request.recipient != Recipient::Device
                 || request.request != 0x74
-                || !matches!(request.value, 0x4d53..=0x4d56 | 0x4d58..=0x4d5b)
             {
                 return None;
             }
             let limit = usize::from(request.length).min(buffer.len());
             let length =
-                crate::diagnostics::read(request.value, request.index, &mut buffer[..limit]);
+                crate::diagnostics::read(request.value, request.index, &mut buffer[..limit])?;
             Some(embassy_usb::control::InResponse::Accepted(
                 &buffer[..length],
             ))

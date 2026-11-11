@@ -12,8 +12,6 @@ import usb.core
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--serial", default="vial:f64c2b3c:d08b40")
 parser.add_argument("--output", type=Path)
-parser.add_argument("--profile", action="store_true")
-parser.add_argument("--fixtures", action="store_true")
 parser.add_argument("--presents", action="store_true")
 parser.add_argument("--accelerator", action="store_true")
 args = parser.parse_args()
@@ -30,20 +28,6 @@ for offset in range(0, length, 128):
     log.extend(device.ctrl_transfer(0xc0, 0x74, 0x4d54, offset, min(128, length-offset), timeout=2000))
 result = {"panic_core_mask": panics, "ui_stage": stage, "frames": frames, "internal_free": internal_free,
           "gui_free": gui_free, "log": log.decode("utf8", errors="replace")}
-if args.profile:
-    fields = struct.unpack("<10I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d55, 0, 40, timeout=2000)))
-    result["profile"] = dict(zip(("uptime_ms", "frames", "state_us", "js_us", "draw_us", "damage_us", "raster_us", "commit_us", "allocation_us", "allocation_calls"), fields))
-    result["pipeline"] = dict(zip(("input_revision", "applied_revision", "snapshot_age_us", "apply_latency_us"),
-        struct.unpack("<4I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d56, 0, 16, timeout=2000)))))
-    result["detail"] = dict(zip(("completed_us", "bridge_setup_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us"), struct.unpack("<13I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d58, 0, 52, timeout=2000)))))
-if args.fixtures:
-    count = struct.unpack("<I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d59, 0xffff, 4, timeout=2000)))[0]
-    assert count <= 32
-    fields = ("pressed", "total_us", "completed_us", "bridge_setup_us", "input_bridge_us", "guest_frame_us", "status_bridge_us", "state_calculation_us", "solid_commit_us", "wake_calculation_us", "framework_us", "state_us", "js_us", "draw_us", "damage_us", "raster_us", "commit_us", "pixels_hash", "cycles")
-    result["fixtures"] = []
-    for index in range(count):
-        words = struct.unpack("<23I", bytes(device.ctrl_transfer(0xc0, 0x74, 0x4d59, index, 92, timeout=2000)))
-        result["fixtures"].append(dict(zip(fields, words[:11] + words[15:])))
 if args.presents:
     if "Full-frame benchmark complete" not in result["log"]:
         parser.error("frame benchmark is still running; read presents after completion")
@@ -67,5 +51,5 @@ if args.accelerator:
 if args.output:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2)+"\n")
-print(json.dumps({k:v for k,v in result.items() if k not in ("log", "fixtures", "presents")}))
+print(json.dumps({k:v for k,v in result.items() if k not in ("log", "presents")}))
 print(result["log"])

@@ -87,7 +87,6 @@ export function updateFrame() {
   }
   const elapsed = now - layerStart;
   const nextPhase = elapsed >= 300 ? 0 : 1 - elapsed / 300;
-  host.__pocketProfile?.(1);
   batch(() => {
     if (changed) {
       if (next.link !== old.link) setLink(next.link);
@@ -112,7 +111,6 @@ export function updateFrame() {
     setTyping(nextTyping); setPhase(nextPhase);
     setLeftFill(left); setRightFill(right);
   });
-  host.__pocketProfile?.(2);
   state = next;
   const easing = nextPhase > 0 || filling;
   host.__rmkAnimating = now < settleUntil || nextTyping || easing ||

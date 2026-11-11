@@ -49,8 +49,6 @@ async fn display_task(peripherals: board::DisplayPeripherals) {
             "PocketJS QuickJS GUI on core {}",
             esp_hal::system::Cpu::current() as usize
         );
-        #[cfg(feature = "usb-diagnostics")]
-        diagnostics::benchmark_memory();
         if let Err(error) = display::run(panel).await {
             log::error!("QuickJS initialization failed: {error:?}");
         }

@@ -234,7 +234,6 @@ fn framework_work_keeps_an_idle_application_running() {
 }
 
 #[test]
-#[cfg(not(feature = "perf-baseline"))]
 fn native_animation_waits_for_a_tick_but_input_is_immediate() {
     let mut ui = JsUi::new().unwrap();
     let mut model = connected();

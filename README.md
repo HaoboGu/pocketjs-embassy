@@ -61,7 +61,8 @@ The preview writes `target/preview.png` using sample keyboard state. The Embassy
 example runs 60 layer updates while a separate heartbeat task continues. These
 host executables use `std` for the harness; the shared UI library does not.
 
-`./tools/verify.sh` builds and lints Vial, Rynk, and the optional PPA configurations.
+`./tools/verify.sh` builds and lints Vial, Rynk, diagnostics, frame benchmarks,
+and the optional PPA configurations.
 It saves each ELF and its static memory report under `target/artifacts`.
 The checks never flash or reset hardware.
 
@@ -152,19 +153,17 @@ A guest error stops further UI drawing while the receiver tasks continue.
 
 ## Optional on-device measurements
 
-Build with `--features usb-diagnostics` to capture a one-shot startup benchmark.
-It uses the same 80 ms logical input timeline for each build and records a hash
-of every rendered frame. Probes automatically stop afterwards; normal builds
-omit the instrumentation. The benchmark does not send keyboard input to the host.
+Build with `--features usb-diagnostics` to expose startup logs, display status,
+heap availability and panic traces over USB. It does not run a benchmark.
 
 ```sh
-uv run tools/read-diagnostics.py --profile --fixtures --output target/measurement.json
+uv run tools/read-diagnostics.py --output target/diagnostics.json
 ```
 
 Build with `--features frame-benchmark` for four display-only workloads with
 real panel transfers. Each workload warms up for at least one second and 32
-attempts, then records 192 attempts. The result buffer is preallocated, detailed
-probes stay disabled, and timing stops when the benchmark finishes. Read samples
+attempts, then records 192 attempts. The result buffer is preallocated, and
+stage timing stops when the benchmark finishes. Read samples
 after completion so USB diagnostic traffic does not disturb the measured run.
 
 ```sh
@@ -188,17 +187,12 @@ python3 tools/summarize-fps.py target/ppa-frames.json --scenario-offset 0
 python3 tools/summarize-fps.py target/ppa-frames.json --scenario-offset 4
 ```
 
-The separate `ppa-probe` feature measures fill and blend primitives. Read it with
+The separate `ppa-probe` feature measures fill and blend primitives without
+running the full-frame workloads. Read it with
 `uv run tools/read-diagnostics.py --accelerator`. Do not combine it with
 `ppa-render`. The driver follows ESP-IDF revision
 `0e6b480f858c69862ffb6001d96e9eef74599a6e` and uses the pinned PAC plus esp-hal's
 interrupt and cache-maintenance APIs; it does not require ESP-IDF or FreeRTOS.
-
-`perf-no-cache` measures the new scheduler without command reuse; `perf-baseline`
-also restores immediate animation polling. `POCKETJS_QJS_OPT_LEVEL=s` selects the
-previous `-Os` C build for comparison. The S31 default is `-O2`. Inspect the ELF
-memory report before flashing a different compiler configuration.
-
 
 ## Live UI development
 
@@ -243,13 +237,11 @@ Artifact changes alone do not trigger an upload; unchanged payloads are skipped.
 Changes published during an upload are picked up afterward. Incomplete or invalid
 builds are reported, and the watcher waits for the next manifest update.
 
-The included build script creates the two example bundles separately from upload:
+Build the included GitHub Light interface, then upload its output:
 
 ```sh
-bun tools/build-ui.ts --layout github --outdir target/ui/github
+bun tools/build-ui.ts --outdir target/ui/github
 uv run tools/reload-ui.py target/ui/github
-bun tools/build-ui.ts --layout paperline --outdir target/ui/paperline
-uv run tools/reload-ui.py target/ui/paperline
 ```
 
 Other UI projects only need to produce this artifact contract; no uploader changes
@@ -271,13 +263,10 @@ core. UI uploads do not write flash; Rust and driver changes require flashing.
 For local rendering checks:
 
 ```sh
-cargo run --release --example validate_bundle -- target/ui/paperline
-cargo run --release --example preview -- --bundle target/ui/paperline --output target/paperline.ppm
-python3 tools/preview.py target/paperline.ppm
+cargo run --release --example validate_bundle -- /path/to/dist
+cargo run --release --example preview -- --bundle /path/to/dist --output target/preview.ppm
+python3 tools/preview.py target/preview.ppm
 ```
-
-Paperline's source is `ui/layouts/paperline/Screen.tsx`. The original `ui/Screen.tsx`
-and embedded `ui/generated` bundle remain unchanged.
 
 ## Source and pins
 

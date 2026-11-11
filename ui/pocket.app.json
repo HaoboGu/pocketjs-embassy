@@ -1,1 +1,0 @@
-{ "app": { "entry": "app.tsx", "framework": "solid", "theme": "./motion.json" } }

@@ -7,8 +7,6 @@ publish = false
 
 [features]
 frame-profile = []
-perf-no-cache = []
-perf-baseline = ["perf-no-cache"]
 
 [dependencies]
 pocket-guest-rquickjs = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false, features = ["rust-alloc"] }

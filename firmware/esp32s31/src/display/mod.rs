@@ -2,10 +2,11 @@
 
 mod ui;
 
-#[cfg(feature = "usb-diagnostics")]
+#[cfg(any(feature = "frame-benchmark", feature = "ppa-probe"))]
 use embassy_futures::select::{Either, select};
 use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Watch};
+#[cfg(any(feature = "frame-benchmark", feature = "ppa-probe"))]
 use embassy_time::Instant;
 use rmk::core_traits::Runnable;
 use rmk::event::{
@@ -37,8 +38,6 @@ pub struct Snapshot {
     /// Wrapping press tally, including modifiers, used to detect typing activity.
     pub presses: u8,
     pub layer: u8,
-    pub revision: u32,
-    pub changed_at_us: u64,
 }
 
 static LATEST: Watch<CriticalSectionRawMutex, Snapshot, 1> = Watch::new();
@@ -122,11 +121,6 @@ impl Runnable for StateCollector {
             while let Some(event) = events.next_event().now_or_never() {
                 self.process(event).await;
             }
-            self.state.revision = self.state.revision.wrapping_add(1);
-            self.state.changed_at_us = Instant::now().as_micros();
-            #[cfg(feature = "usb-diagnostics")]
-            crate::diagnostics::INPUT_REVISION
-                .store(self.state.revision, core::sync::atomic::Ordering::Relaxed);
             sender.send(self.state);
         }
     }
@@ -134,7 +128,7 @@ impl Runnable for StateCollector {
 
 pub async fn run(mut panel: Panel) -> Result<(), pocketjs_embassy::Error> {
     let mut receiver = LATEST.receiver().unwrap();
-    #[cfg(feature = "usb-diagnostics")]
+    #[cfg(any(feature = "frame-benchmark", feature = "ppa-probe"))]
     {
         let deadline = Instant::now() + embassy_time::Duration::from_secs(20);
         let mut snapshot = receiver.get().await;

@@ -14,10 +14,11 @@ cargo test --release --locked
 cargo clippy --release --locked --all-targets -- -D warnings
 cargo run --release --locked --example embassy
 cargo run --release --locked --example preview
+cargo run --release --locked --example validate_bundle -- ui/generated
 python3 tools/preview.py
 (
     cd firmware/esp32s31
-    for protocol in rynk vial,ppa-probe vial,ppa-render vial; do
+    for protocol in rynk vial,usb-diagnostics vial,frame-benchmark vial,ppa-probe vial,ppa-render vial,frame-benchmark,ppa-render vial; do
         cargo build --release --locked --no-default-features --features "$protocol"
         cargo clippy --release --locked --no-default-features --features "$protocol" -- -D warnings
         artifact="../../target/artifacts/$protocol"

@@ -8,12 +8,10 @@ license = "GPL-3.0-or-later"
 default = ["vial"]
 vial = ["rmk/vial"]
 rynk = ["rmk/rynk"]
-frame-benchmark = ["usb-diagnostics"]
-ppa-probe = ["frame-benchmark", "dep:esp32s31-pac"]
+frame-benchmark = ["usb-diagnostics", "pocketjs-embassy/frame-profile"]
+ppa-probe = ["usb-diagnostics", "dep:esp32s31-pac"]
 ppa-render = ["dep:esp32s31-pac", "dep:pocket-raster", "dep:pocket-drivers"]
-perf-no-cache = ["frame-benchmark", "pocketjs-embassy/perf-no-cache"]
-perf-baseline = ["perf-no-cache", "pocketjs-embassy/perf-baseline"]
-usb-diagnostics = ["esp-backtrace/custom-pre-backtrace", "pocketjs-embassy/frame-profile"]
+usb-diagnostics = ["esp-backtrace/custom-pre-backtrace"]
 
 [[bin]]
 name = "rmk-mosaico-quickjs"

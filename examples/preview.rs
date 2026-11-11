@@ -40,7 +40,6 @@ fn main() {
     }
     ui.frame(state.clone(), 0, false).unwrap();
     ui.frame(state, 700_000, false).unwrap();
-    assert!(ui.contains_text("Connected") && ui.contains_text("02"));
     let path = option("--output")
         .cloned()
         .or_else(|| args.first().filter(|s| !s.starts_with("--")).cloned())

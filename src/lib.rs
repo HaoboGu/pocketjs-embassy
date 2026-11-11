@@ -40,19 +40,6 @@ fn profile_frame(phase: u32) {
     let _ = phase;
 }
 
-#[inline(always)]
-fn profile_detail(phase: u32) {
-    #[cfg(all(feature = "frame-profile", target_os = "none"))]
-    unsafe {
-        unsafe extern "C" {
-            fn pocket_bridge_phase(phase: u32);
-        }
-        pocket_bridge_phase(phase);
-    }
-    #[cfg(not(all(feature = "frame-profile", target_os = "none")))]
-    let _ = phase;
-}
-
 // Keep native drawing separate from the guest bridge for code generation.
 #[inline(never)]
 fn draw_native(state: &mut pocket_runtime::CoreState, advance: bool) {
@@ -164,10 +151,7 @@ impl JsUi {
             .set_viewport(WIDTH as f32, HEIGHT as f32);
         context.core_mut()?.ui.set_stable_motion_paint(true);
         context.core_mut()?.ui.set_fast_absolute_layout(true);
-        context
-            .core_mut()?
-            .ui
-            .set_draw_cache_enabled(!cfg!(feature = "perf-no-cache"));
+        context.core_mut()?.ui.set_draw_cache_enabled(true);
         assert!(context.core_mut()?.ui.set_tick_rate(60));
         let environment = GuestEnvironment {
             host: "mosaico-experiment",
@@ -196,20 +180,7 @@ impl JsUi {
             })));
         });
         ui.js
-            .with(|ctx| {
-                ctx.globals().set("__pocketRecordInput", false)?;
-                #[cfg(all(feature = "frame-profile", target_os = "none"))]
-                ctx.globals().set(
-                    "__pocketProfile",
-                    rquickjs::Function::new(ctx.clone(), |phase: u32| {
-                        unsafe extern "C" {
-                            fn pocket_app_phase(phase: u32);
-                        }
-                        unsafe { pocket_app_phase(phase) };
-                    })?,
-                )?;
-                Ok::<_, rquickjs::Error>(())
-            })
+            .with(|ctx| ctx.globals().set("__pocketRecordInput", false))
             .unwrap()
             .map_err(|error| Error::JavaScript(error.to_string()))?;
         ui.evaluate(javascript)?;
@@ -305,12 +276,7 @@ impl JsUi {
             return Ok(None);
         }
         let target_tick = now_us.saturating_mul(60) / 1_000_000;
-        if !cfg!(feature = "perf-baseline")
-            && !changed
-            && !force
-            && target_tick == self.clock_tick
-            && now_us < self.next_js_us
-        {
+        if !changed && !force && target_tick == self.clock_tick && now_us < self.next_js_us {
             return Ok(None);
         }
         profile_frame(0);
@@ -325,9 +291,7 @@ impl JsUi {
         }
         profile_frame(1);
         if changed || force || now_us >= self.next_js_us {
-            profile_detail(0);
             self.interrupt_polls.set(32);
-            profile_detail(1);
             self.js
                 .with(|ctx| {
                     let publish = || -> rquickjs::Result<()> {
@@ -358,7 +322,6 @@ impl JsUi {
                         .map_err(|error| Error::JavaScript(error.to_string()))
                 })
                 .unwrap()?;
-            profile_detail(2);
             let frame = GuestFrame {
                 buttons: 0,
                 analog: 0x8080,
@@ -373,7 +336,6 @@ impl JsUi {
             self.js.frame(&frame).map_err(|_| {
                 Error::JavaScript(self.js.last_error().unwrap_or("guest failed").into())
             })?;
-            profile_detail(3);
             (self.animating, self.next_js_us) = self
                 .js
                 .with(|ctx| {
@@ -407,7 +369,6 @@ impl JsUi {
                         .map_err(|error| Error::JavaScript(error.to_string()))
                 })
                 .unwrap()?;
-            profile_detail(4);
         }
         self.model = Some(model);
         self.clock_tick = target_tick;
@@ -440,24 +401,12 @@ impl JsUi {
         if !self.animating {
             return None;
         }
-        if cfg!(feature = "perf-baseline") {
-            return Some(self.last_us);
-        }
         let native = self
             .clock_tick
             .saturating_add(1)
             .saturating_mul(1_000_000)
             .div_ceil(60);
         Some(native.min(self.next_js_us))
-    }
-
-    pub fn cache_info(&self) -> (bool, bool, usize, u32) {
-        self.runtime
-            .op_context()
-            .core()
-            .unwrap()
-            .ui
-            .draw_cache_info()
     }
 
     pub fn animating(&self) -> bool {
