@@ -7,6 +7,9 @@ cd "$(dirname "$0")/.."
     bunx --no-install tsc --noEmit
     cargo test -p pocketjs-core -p pocket-runtime --features pocketjs-core/counters --release --locked
 )
+bun .deps/pocketjs/node_modules/typescript/bin/tsc --project examples/hotreload-ui/tsconfig.json --noEmit
+bun tools/build-ui.ts --entry examples/hotreload-ui/app.tsx --outdir target/ui/signal
+uv run tools/reload-ui.py target/ui/signal --check
 uv run --with 'pyusb>=1.3,<2' python -m unittest discover -s tools/tests
 cargo fmt --check
 cargo fmt --manifest-path firmware/esp32s31/Cargo.toml --check
@@ -15,6 +18,7 @@ cargo clippy --release --locked --all-targets -- -D warnings
 cargo run --release --locked --example embassy
 cargo run --release --locked --example preview
 cargo run --release --locked --example validate_bundle -- ui/generated
+cargo run --release --locked --example validate_bundle -- target/ui/signal
 python3 tools/preview.py
 (
     cd firmware/esp32s31

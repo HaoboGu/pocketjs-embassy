@@ -244,6 +244,22 @@ bun tools/build-ui.ts --outdir target/ui/github
 uv run tools/reload-ui.py target/ui/github
 ```
 
+The [Signal hot-reload example](examples/hotreload-ui/app.tsx) is a separate Solid
+TSX interface with a large current-key display, layer feedback, modifiers and
+charging indicators. It shares the keyboard-state bridge in `ui/Status.ts`.
+
+```sh
+bun tools/build-ui.ts --entry examples/hotreload-ui/app.tsx --outdir target/ui/signal
+uv run tools/reload-ui.py target/ui/signal
+# Return to the built-in GitHub Light interface.
+uv run tools/reload-ui.py ui/generated
+```
+
+`--entry` accepts a Solid/TSX source file and requires a separate `--outdir`.
+The source project's `pocket.app.json` supplies its compiler and animation settings.
+The build writes bundle metadata last, including artifact names for entries other
+than `app.tsx`. The default build still produces the firmware's GitHub Light bundle.
+
 Other UI projects only need to produce this artifact contract; no uploader changes
 or theme registration are needed. `--status` reads the active bundle generation,
 CRC and uptime. `--serial` selects one receiver, and `--output` saves a JSON report.

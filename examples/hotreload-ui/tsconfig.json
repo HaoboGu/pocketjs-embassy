@@ -1,0 +1,27 @@
+{
+  "extends": "../../.deps/pocketjs/tsconfig.json",
+  "compilerOptions": {
+    "typeRoots": [
+      "../../.deps/pocketjs/node_modules/@types"
+    ],
+    "paths": {
+      "solid-js": [
+        "./node_modules/solid-js/types/index.d.ts"
+      ],
+      "@pocketjs/framework/solid": [
+        "./framework/src/index.ts"
+      ],
+      "@pocketjs/framework/components": [
+        "./framework/src/components.ts"
+      ],
+      "@pocketjs/framework/solid/std": [
+        "./framework/src/std-microts.ts"
+      ]
+    }
+  },
+  "include": [
+    "app.tsx",
+    "../../ui/Status.ts",
+    "../../.deps/pocketjs/framework/src/jsx.d.ts"
+  ]
+}
