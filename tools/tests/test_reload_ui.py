@@ -162,6 +162,37 @@ class ReloadTests(unittest.TestCase):
         claim.assert_called_once_with(receiver, 7)
         release.assert_called_once_with(receiver, 7)
 
+    def test_idle_status_can_precede_abort_packet_consumption(self):
+        class DelayedAbort(Receiver):
+            def __init__(self):
+                super().__init__()
+                self.phase = 0
+                self.pending_abort = False
+                self.begin_attempts = 0
+
+            def ctrl_transfer(self, direction, request, magic, operation, data, timeout):
+                if direction == 0x40 and operation == 3:
+                    self.pending_abort = True
+                if direction == 0x40 and operation == 0:
+                    self.begin_attempts += 1
+                    if self.pending_abort:
+                        self.pending_abort = False
+                        raise reload_ui.usb.core.USBError("Queue full", errno=32)
+                return super().ctrl_transfer(direction, request, magic, operation, data, timeout)
+
+        manifest, js, pak, _ = self.bundle()
+        receiver = DelayedAbort()
+        interface = SimpleNamespace(bInterfaceNumber=7)
+        endpoint = SimpleNamespace(bEndpointAddress=2, wMaxPacketSize=512)
+        with patch.object(reload_ui.usb.util, "find_descriptor", side_effect=[interface, endpoint]), \
+             patch.object(reload_ui.usb.util, "claim_interface"), \
+             patch.object(reload_ui.usb.util, "release_interface"), \
+             patch.object(reload_ui.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            reload_ui.upload(receiver, reload_ui.load_bundle(manifest))
+        self.assertEqual(receiver.begin_attempts, 2)
+        self.assertEqual(receiver.received, js.read_bytes() + pak.read_bytes())
+        self.assertEqual(receiver.generation, 10)
+
     def test_incompatible_package_never_starts_an_upload(self):
         manifest, _, _, metadata = self.bundle()
         for candidate in (dict(metadata, abi=99), dict(metadata, viewport=[320, 240])):

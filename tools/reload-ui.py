@@ -4,6 +4,7 @@
 # ///
 """Hot-reload a prebuilt PocketJS bundle over USB without resetting the receiver."""
 import argparse
+import errno
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -121,7 +122,16 @@ def upload(device, bundle):
     while status(device)["phase"] != 0:
         if time.monotonic() > deadline: raise TimeoutError("Could not clear the previous upload")
         time.sleep(0.005)
-    device.ctrl_transfer(0x40, 0x75, 0x4d53, 0, header, timeout=2000)
+    while True:
+        try:
+            device.ctrl_transfer(0x40, 0x75, 0x4d53, 0, header, timeout=2000)
+            break
+        except usb.core.USBError as error:
+            # An already-idle status can precede consumption of the abort packet.
+            # A stalled begin was rejected by the one-packet queue and is safe to retry.
+            if error.errno != errno.EPIPE or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.005)
     wait_for(device, lambda s: s["phase"] == 1 and s["received"] == 0 and s["total"] == len(payload))
     interface = usb.util.find_descriptor(device.get_active_configuration(),
         bInterfaceClass=0xff, bInterfaceSubClass=0x4d, bInterfaceProtocol=1)
