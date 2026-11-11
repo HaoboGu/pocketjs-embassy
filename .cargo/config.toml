@@ -1,2 +1,0 @@
-[env]
-POCKET_QUICKJS_DIR = { value = ".deps/quickjs-embedded", relative = true }

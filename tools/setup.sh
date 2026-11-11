@@ -2,28 +2,19 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
-pocketjs_url="file:///Users/haobogu/Projects/keyboard/pocketjs"
-pocketjs_rev="41baa45fcc8b5d72194948952779d379085ecccf"
+pocketjs_url="https://github.com/HaoboGu/pocketjs"
+pocketjs_rev="acddb19a9544e57c3d6995602b3433d105a9929d"
 mkdir -p .deps
 if [[ ! -d .deps/pocketjs/.git ]]; then
     git clone --no-checkout "$pocketjs_url" .deps/pocketjs
 fi
 git -C .deps/pocketjs fetch "$pocketjs_url" "$pocketjs_rev"
 git -C .deps/pocketjs checkout --detach "$pocketjs_rev"
-for patch in pocketjs-style-lookup.patch pocketjs-profiler.patch pocketjs-display-runtime.patch pocketjs-native-execution.patch; do
+for patch in pocketjs-style-lookup.patch pocketjs-display-runtime.patch pocketjs-native-execution.patch; do
     if ! git -C .deps/pocketjs apply --reverse --check "$repo_root/patches/$patch" 2>/dev/null; then
         git -C .deps/pocketjs apply "$repo_root/patches/$patch"
     fi
 done
-if [[ ! -d .deps/quickjs/.git ]]; then
-    git clone --filter=blob:none --no-checkout https://github.com/quickjs-ng/quickjs .deps/quickjs
-fi
-git -C .deps/quickjs fetch https://github.com/quickjs-ng/quickjs d8e1cc68f71fba2e084a18408ab2e6f9838b4d20
-git -C .deps/quickjs checkout --detach d8e1cc68f71fba2e084a18408ab2e6f9838b4d20
-if ! git -C .deps/quickjs apply --reverse --check "$repo_root/patches/quickjs-iram.patch" 2>/dev/null; then
-    git -C .deps/quickjs apply "$repo_root/patches/quickjs-iram.patch"
-fi
-python3 .deps/pocketjs/tools/packaging/quickjs/prepare-baremetal.py --source .deps/quickjs --output .deps/quickjs-embedded
 if [[ ! -d .deps/rmk/.git ]]; then
     git clone --filter=blob:none --no-checkout https://github.com/rmk-rs/rmk .deps/rmk
 fi

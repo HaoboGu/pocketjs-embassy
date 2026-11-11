@@ -8,7 +8,7 @@
 
 extern uint64_t pocket_uptime_us(void);
 
-int pocket_qjs_clock_gettime(clockid_t clock, struct timespec *value) {
+int clock_gettime(clockid_t clock, struct timespec *value) {
     if (clock != CLOCK_MONOTONIC) { errno = EINVAL; return -1; }
     const uint64_t micros = pocket_uptime_us();
     value->tv_sec = micros / 1000000;

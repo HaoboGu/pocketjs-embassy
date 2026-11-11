@@ -1,7 +1,8 @@
 # RMK Mosaico Dongle with QuickJS
 
 A BLE-to-USB RMK receiver for ESP-Mosaico with the existing 480×480 GitHub Light
-status screen. Solid TSX runs as JavaScript in QuickJS-NG; the PocketJS UI core,
+status screen. Solid TSX runs as JavaScript in QuickJS-NG through the existing
+`pocket-guest-rquickjs` Rust bindings; the PocketJS UI core,
 receiver and Embassy integration remain `no_std`. MicroTS is not used.
 
 The default firmware relays Vial. A Rynk build is also available. The display
@@ -11,7 +12,8 @@ modifiers, and the keyboard's left/right battery readings.
 ## Build
 
 Install stable Rust, Bun, Git, Python 3, and a host C compiler. The tested host is
-macOS arm64. From the repository root:
+macOS arm64. Firmware binding generation also needs libclang: Xcode Command Line
+Tools provides it on macOS; install `libclang-dev` on Debian/Ubuntu. From the repository root:
 
 ```sh
 ./tools/setup.sh --s31
@@ -35,11 +37,11 @@ Setup expands shallow RMK checkouts before building because the storage identifi
 also depends on Git path history; it invalidates cached RMK build metadata after
 that expansion.
 
-The Embassy host lives on the local PocketJS branch `feat/embassy` at
-`/Users/haobogu/Projects/keyboard/pocketjs`. Cargo and `tools/setup.sh` currently
-pin that local Git repository for development. This checkout requires that sibling
-repository; replace the file Git URL with a published fork URL before distributing
-this revision to other machines.
+PocketJS's Embassy support is pinned to the published `feat/embassy` commit in
+[HaoboGu/pocketjs](https://github.com/HaoboGu/pocketjs/tree/feat/embassy).
+The guest and Embassy platform come from that Git dependency. Setup keeps a
+checkout under `.deps` for the remaining native renderer/compiler patches;
+no sibling checkout or local Git URL is required.
 
 The setup script fetches pinned source into `.deps`, applies the recorded
 patches, and installs an isolated Espressif RISC-V C toolchain there. Generated
@@ -69,9 +71,10 @@ incremental versus full redraw, elapsed-time layer motion, charging-icon geometr
 JS errors, execution budgets and immutable asset buffers. The RMK patch includes
 a regression test for a display subscribing after the keyboard has connected.
 
-The Vial build has been tested on ESP-Mosaico: the display works, the keyboard
-reconnects, and its VIA compatibility endpoint returns protocol version 9. Rynk is build-checked. Long-duration
-radio testing and stack high-water measurements remain separate from these checks.
+The rquickjs migration is validated with host tests and linked firmware builds.
+Device checks and frame-rate comparisons must use the same receiver and keyboard
+state. Long-duration radio testing and stack high-water measurements remain
+separate from these checks.
 
 ## Flash
 
@@ -116,28 +119,31 @@ region is now used explicitly rather than leaving it empty.
 | Controller, RTOS and newlib C heap | Internal SRAM: reclaimed + ordinary | 64 + 8 = 72 KiB |
 | UI executor stack | Ordinary internal SRAM | 192 KiB, including a 128 KiB JS stack limit |
 | SPI DMA buffers | Ordinary internal SRAM | 2 × 28 KiB |
-| QuickJS interpreter and hot VM helpers | Ordinary internal SRAM | About 38.5 KiB with `-O2`; remaining engine code stays in flash |
+| QuickJS interpreter and hot VM helpers | Ordinary internal SRAM | Selected by `rwtext_hook.x` with `-O2`; remaining engine code stays in flash |
 | Core 0 stack | Remaining ordinary SRAM | See the linked ELF memory report |
 | Panel wire framebuffer | PSRAM prefix | 450 KiB |
 | Rust UI, QuickJS allocations and retained UI framebuffer | PSRAM GUI heap | Remaining PSRAM; JS engine heap limit 4 MiB |
 | Embedded JS, styles and fonts | Flash | Checked-in bundle |
 
 The allocator uses TLSF and two region slots: the controller needs two regions
-and the GUI needs one. QuickJS allocation calls are redirected to the Rust GUI
-allocator, including its usable-size callback for memory accounting. Global C and
+and the GUI needs one. The `rquickjs/rust-alloc` feature routes VM allocations to the Rust GUI
+allocator and supplies its memory accounting. Global C and
 reentrant newlib allocation calls use `esp_alloc::HEAP` in internal RAM for the
 radio. The radio's formatter and QuickJS's newlib formatter have separate symbol
 names. The controller's 72 KiB heap budget matches RMK/esp-hal BLE examples; it is not a
 measured minimum. UART logs report free internal memory
 after controller initialization; debug logging also includes render timing.
 
-PocketJS's `pocket-guest-quickjs` crate owns the QuickJS realm and implements the
-standard `Guest` lifecycle. `pocket-embassy` supplies Embassy pacing and a separate
-canonical display adapter. This application keeps its optimized rendering loop,
-RMK state bridge, runtime/package ownership, C exports and ESP/newlib link settings.
-The program builds the C engine through the shared source helper; setup explicitly
-prepares its pinned bare-metal source. The board supplies clock and libc hooks.
-QuickJS time reads use device uptime; they do not provide a wall-clock date.
+PocketJS's existing `pocket-guest-rquickjs` crate owns the QuickJS realm and
+implements the standard `Guest` lifecycle with `no_std + alloc`. `rquickjs-sys`
+builds the bundled engine from the unmodified rquickjs 0.14 release. Target compiler,
+newlib and bindgen settings live in the firmware Cargo configuration.
+`rwtext_hook.x` places interpreter hot paths in SRAM without changing engine sources.
+
+`pocket-embassy` supplies pacing and a separate canonical display adapter. This
+application keeps its optimized rendering loop, Rust state bridge, runtime/package
+ownership and ESP/newlib link settings. The board supplies clock and libc hooks;
+QuickJS time reads use device uptime, not a wall-clock date.
 
 A live `JsUi` stays on its owning executor and is not `Send`. JS evaluation and
 native rendering are synchronous. The interrupt-poll budget stops runaway JS;
@@ -280,8 +286,8 @@ and embedded `ui/generated` bundle remain unchanged.
 - [`ui/Status.ts`](ui/Status.ts): Solid signals and time-based UI state.
 - [`src/state.rs`](src/state.rs): typed state copied directly into JS values, without JSON parsing or evaluating key labels as code.
 - [`firmware/esp32s31/src/display`](firmware/esp32s31/src/display): RMK event folding and presentation.
-- PocketJS: local `feat/embassy` commit `41baa45fcc8b5d72194948952779d379085ecccf`, based on upstream `9b5f34e`.
-- QuickJS-NG: `d8e1cc68f71fba2e084a18408ab2e6f9838b4d20` (includes upstream immutable-buffer and newlib fixes).
+- PocketJS: remote `feat/embassy` commit `acddb19a9544e57c3d6995602b3433d105a9929d`, based on upstream `9b5f34e`.
+- rquickjs / rquickjs-core / rquickjs-sys: released `0.14.0`, including the bundled QuickJS-NG engine.
 - RMK: upstream merge `c7195de6fe994da3651fdc20ee358ca4e69de11d` plus
   [`rmk-dongle-state.patch`](patches/rmk-dongle-state.patch).
 - ESP stack: `esp-rs/esp-hal` upstream merge `c38ad27aa5e0894f3447624b63463c9e7d5c1e95`.
@@ -291,7 +297,7 @@ and embedded `ui/generated` bundle remain unchanged.
 Merged platform changes come from official repositories: RMK's ESP32-S31
 support ([#1393](https://github.com/rmk-rs/rmk/pull/1393)) and the ESP USB RX FIFO
 fix ([#6615](https://github.com/esp-rs/esp-hal/pull/6615)) need no local support
-branch. The PocketJS development pin identifies the local feature commit; the other pins identify upstream commits.
+branch. PocketJS is pinned to the published feature commit; the other pins identify official upstream commits.
 RMK's local Cargo override contains only the retained dongle-state event patch.
 
 The remaining patches have separate ownership:
@@ -302,16 +308,11 @@ The remaining patches have separate ownership:
 | `pocketjs-display-runtime.patch` | Native Solid bindings and pending-work scheduling | General PocketJS optimization |
 | `pocketjs-native-execution.patch` | Layout, command replay, damage, raster and ABI paths | Split by subsystem for PocketJS review |
 | `rmk-dongle-state.patch` | Retain connection state for late display subscribers | Independent RMK event fix |
-| `quickjs-iram.patch` | Put interpreter and hot helpers in SRAM | Mosaico-specific placement policy |
-| `pocketjs-profiler.patch` | Optional guest native-op timing hooks | Local measurement integration |
 
-QuickJS-NG's upstream commits `249bb27` and `eb52863` provide immutable
-TypedArray and ArrayBuffer semantics; [#1657](https://github.com/quickjs-ng/quickjs/pull/1657)
-fixes the newlib `int32_t` pointer mismatches. These duplicate local changes were
-removed, including `quickjs-port.patch`. In QuickJS itself, only the board-specific
-[SRAM placement patch](patches/quickjs-iram.patch) remains. The local PocketJS branch adapts the new external
-ArrayBuffer API and retains the older API path.
-`POCKETJS_QJS_IRAM=0` builds a flash-execution control for comparison.
+The engine comes from Cargo's rquickjs release; setup no longer fetches, rewrites
+or patches QuickJS. SRAM placement is a board linker policy. Optional diagnostics
+measure the state bridge, complete guest turn, rendering and DMA stages; the removed
+C guest's internal timing slots are not populated by the Rust guest.
 
 The [native-execution patch](patches/pocketjs-native-execution.patch) tracks paint mutations
 and replays unchanged small view/text groups. It retains at most 512 node slots

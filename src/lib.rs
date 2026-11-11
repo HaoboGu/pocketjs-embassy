@@ -4,18 +4,21 @@ extern crate alloc;
 pub mod reload;
 pub mod state;
 
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
-use core::{
-    ffi::{CStr, c_char, c_void},
-    ptr::NonNull,
+use alloc::{
+    boxed::Box,
+    rc::Rc,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
 };
-use pocket_drivers::abi::{PocketResult, PocketRuntime};
-use pocket_guest_quickjs::{CreateError, Limits, QuickJsGuest};
+use core::cell::Cell;
+use pocket_guest_rquickjs::RquickjsGuest;
 use pocket_render::damage::{DamagePlan, DamageTarget, DamageTracker};
 use pocket_runtime::{
-    Cow, Guest, GuestEnvironment, GuestFrame, InputClasses, Profile, RuntimeConfig, RuntimeError,
-    abi::{self, Handle},
+    Cow, Guest, GuestEnvironment, GuestFrame, InputClasses, Profile, Runtime, RuntimeConfig,
+    RuntimeError,
 };
+use rquickjs::{Array, CatchResultExt, Coerced, FromJs, Object, Value};
 use state::Model;
 
 pub const JS_STACK_LIMIT: usize = 128 * 1024;
@@ -23,41 +26,6 @@ pub const WIDTH: usize = 480;
 pub const HEIGHT: usize = 480;
 const JAVASCRIPT: &[u8] = include_bytes!("../ui/generated/app.js");
 const ASSETS: &[u8] = include_bytes!("../ui/generated/app.pak");
-
-#[repr(C)]
-struct NativeString {
-    data: *const u8,
-    length: usize,
-}
-impl From<&str> for NativeString {
-    fn from(value: &str) -> Self {
-        Self {
-            data: value.as_ptr(),
-            length: value.len(),
-        }
-    }
-}
-#[repr(C)]
-struct NativeModel {
-    link: NativeString,
-    usb: NativeString,
-    keys: [NativeString; 6],
-    layer: u32,
-    modifiers: u32,
-    presses: u32,
-    battery_left: i32,
-    battery_right: i32,
-    charging: u32,
-}
-
-unsafe extern "C" {
-    fn mosaico_model_configure(context: *mut c_void, binding: *mut c_void);
-    fn mosaico_model_create(context: *mut c_void) -> *mut c_void;
-    fn mosaico_model_error(bridge: *mut c_void) -> *const c_char;
-    fn mosaico_model_destroy(bridge: *mut c_void);
-    fn mosaico_model_input(bridge: *mut c_void, state: *const NativeModel, now_us: u64) -> i32;
-    fn mosaico_model_animating(bridge: *mut c_void, next_frame_us: *mut u64) -> i32;
-}
 
 #[inline(always)]
 fn profile_frame(phase: u32) {
@@ -108,11 +76,10 @@ impl From<RuntimeError> for Error {
 
 /// One owner thread drives the QuickJS guest and its native UI.
 pub struct JsUi {
-    // The guest is destroyed before the handle and borrowed package storage.
-    js: QuickJsGuest,
-    handle: Box<Handle>,
-    assets: Cow<'static, [u8]>,
-    bridge: NonNull<c_void>,
+    // The guest drops before the native runtime.
+    js: RquickjsGuest,
+    runtime: Box<Runtime>,
+    interrupt_polls: Rc<Cell<u32>>,
     pixels: Framebuffer,
     model: Option<Model>,
     clock_tick: u64,
@@ -175,32 +142,13 @@ impl JsUi {
     }
 
     fn create(javascript: &[u8], assets: Cow<'static, [u8]>) -> Result<Self, Error> {
-        let handle = Handle::new(runtime_config())?;
-        let mut js = unsafe {
-            QuickJsGuest::new(
-                handle.as_ptr(),
-                Limits {
-                    heap_bytes: 4 * 1024 * 1024,
-                    stack_bytes: JS_STACK_LIMIT,
-                    interrupt_polls: 256,
-                },
-            )
-        }
-        .map_err(|error| match error {
-            CreateError::Allocation => Error::Allocation,
-            CreateError::InvalidLimits => Error::Runtime(RuntimeError::InvalidConfiguration),
-            CreateError::Binding(error) => Error::Runtime(error.into()),
-        })?;
-        unsafe {
-            mosaico_model_configure(js.context_ptr(), js.binding_ptr());
-        }
-        let bridge = NonNull::new(unsafe { mosaico_model_create(js.context_ptr()) })
-            .ok_or(Error::Allocation)?;
+        let runtime = Box::new(Runtime::new(runtime_config())?);
+        let js = RquickjsGuest::default();
+        let interrupt_polls = Rc::new(Cell::new(256));
         let mut ui = Self {
             js,
-            handle,
-            assets,
-            bridge,
+            runtime,
+            interrupt_polls,
             pixels: Framebuffer::new(),
             model: None,
             clock_tick: 0,
@@ -210,7 +158,7 @@ impl JsUi {
             damage: DamageTracker::new(),
             pending_frame: false,
         };
-        let context = ui.handle.op_context();
+        let context = ui.runtime.op_context();
         context
             .core_mut()?
             .ui
@@ -232,22 +180,48 @@ impl JsUi {
             auxiliary_root: -1,
             raster_density: 1,
             heap_limit: 4 * 1024 * 1024,
-            pak: &ui.assets,
+            pak: &assets,
             worker_javascript: &[],
             assets: None,
         };
         ui.js
             .initialize(context, &environment)
-            .map_err(|_| Error::JavaScript(ui.js.last_error()))?;
+            .map_err(|_| Error::JavaScript(ui.js.last_error().unwrap_or("guest failed").into()))?;
+        let polls = Rc::clone(&ui.interrupt_polls);
+        ui.js.with_runtime(|runtime| {
+            runtime.set_max_stack_size(JS_STACK_LIMIT);
+            runtime.set_interrupt_handler(Some(Box::new(move || {
+                let remaining = polls.get();
+                polls.set(remaining.saturating_sub(1));
+                remaining == 0
+            })));
+        });
+        ui.js
+            .with(|ctx| {
+                ctx.globals().set("__pocketRecordInput", false)?;
+                #[cfg(all(feature = "frame-profile", target_os = "none"))]
+                ctx.globals().set(
+                    "__pocketProfile",
+                    rquickjs::Function::new(ctx.clone(), |phase: u32| {
+                        unsafe extern "C" {
+                            fn pocket_app_phase(phase: u32);
+                        }
+                        unsafe { pocket_app_phase(phase) };
+                    })?,
+                )?;
+                Ok::<_, rquickjs::Error>(())
+            })
+            .unwrap()
+            .map_err(|error| Error::JavaScript(error.to_string()))?;
         ui.evaluate(javascript)?;
         Ok(ui)
     }
 
     pub fn evaluate(&mut self, source: &[u8]) -> Result<(), Error> {
-        self.js.set_interrupt_budget(256);
-        self.js
-            .evaluate(source)
-            .map_err(|_| Error::JavaScript(self.js.last_error()))?;
+        self.interrupt_polls.set(256);
+        self.js.evaluate(source).map_err(|_| {
+            Error::JavaScript(self.js.last_error().unwrap_or("guest failed").into())
+        })?;
         self.animating = true;
         self.next_js_us = 0;
         Ok(())
@@ -262,7 +236,7 @@ impl JsUi {
         let Some(damage) = self.prepare_frame(model, now_us, force)? else {
             return Ok(None);
         };
-        let context = self.handle.op_context();
+        let context = self.runtime.op_context();
         let state = context.core()?;
         if let Some(commands) = self.damage.prepared_commands() {
             pocket_raster::render_prepared_rgb565_regions(
@@ -298,7 +272,7 @@ impl JsUi {
         let Some(damage) = self.prepare_frame(model, now_us, force)? else {
             return Ok(None);
         };
-        let context = self.handle.op_context();
+        let context = self.runtime.op_context();
         let state = context.core()?;
         if let Some(commands) = self.damage.prepared_commands() {
             renderer
@@ -346,36 +320,45 @@ impl JsUi {
             self.clock_tick = target_tick;
         }
         let ticks = target_tick - self.clock_tick;
-        let context = self.handle.op_context();
+        let context = self.runtime.op_context();
         for _ in 1..ticks {
             context.core_mut()?.ui.tick();
         }
         profile_frame(1);
         if changed || force || now_us >= self.next_js_us {
             profile_detail(0);
-            let input = changed.then(|| NativeModel {
-                link: model.link.into(),
-                usb: model.usb.into(),
-                keys: model
-                    .key_labels
-                    .each_ref()
-                    .map(|label| label.as_str().into()),
-                layer: model.layer.into(),
-                modifiers: model.modifiers.into(),
-                presses: model.presses.into(),
-                battery_left: model.battery_left,
-                battery_right: model.battery_right,
-                charging: u32::from(model.charging_left) | (u32::from(model.charging_right) << 1),
-            });
-            self.js.set_interrupt_budget(32);
-            let pointer = input
-                .as_ref()
-                .map_or(core::ptr::null(), core::ptr::from_ref);
+            self.interrupt_polls.set(32);
             profile_detail(1);
-            // All borrowed strings are copied into JS values during this call.
-            if unsafe { mosaico_model_input(self.bridge.as_ptr(), pointer, now_us) } != 0 {
-                return Err(self.exception());
-            }
+            self.js
+                .with(|ctx| {
+                    let publish = || -> rquickjs::Result<()> {
+                        let global = ctx.globals();
+                        global.set("__rmkTime", now_us as f64 / 1000.0)?;
+                        if changed {
+                            let input = Object::new(ctx.clone())?;
+                            input.set("link", model.link)?;
+                            input.set("usb", model.usb)?;
+                            input.set("layer", model.layer)?;
+                            input.set("modifiers", model.modifiers)?;
+                            input.set("presses", model.presses)?;
+                            input.set("battery_left", model.battery_left)?;
+                            input.set("battery_right", model.battery_right)?;
+                            input.set("charging_left", model.charging_left)?;
+                            input.set("charging_right", model.charging_right)?;
+                            let keys = Array::new(ctx.clone())?;
+                            for (index, label) in model.key_labels.iter().enumerate() {
+                                keys.set(index, label.as_str())?;
+                            }
+                            input.set("key_labels", keys)?;
+                            global.set("__rmkPending", input)?;
+                        }
+                        Ok(())
+                    };
+                    publish()
+                        .catch(&ctx)
+                        .map_err(|error| Error::JavaScript(error.to_string()))
+                })
+                .unwrap()?;
             profile_detail(2);
             let frame = GuestFrame {
                 buttons: 0,
@@ -388,16 +371,43 @@ impl JsUi {
                 motion: None,
                 text: &[],
             };
-            self.js
-                .frame(&frame)
-                .map_err(|_| Error::JavaScript(self.js.last_error()))?;
+            self.js.frame(&frame).map_err(|_| {
+                Error::JavaScript(self.js.last_error().unwrap_or("guest failed").into())
+            })?;
             profile_detail(3);
-            let active =
-                unsafe { mosaico_model_animating(self.bridge.as_ptr(), &mut self.next_js_us) };
-            if active < 0 {
-                return Err(self.exception());
-            }
-            self.animating = active != 0;
+            (self.animating, self.next_js_us) = self
+                .js
+                .with(|ctx| {
+                    let status = || -> rquickjs::Result<(bool, u64)> {
+                        let globals = ctx.globals();
+                        let value: Value = globals.get("__rmkAnimating")?;
+                        let active =
+                            value.is_undefined() || Coerced::<bool>::from_js(&ctx, value)?.0;
+                        let framework_active: Coerced<bool> = globals.get("__pocketNeedsFrame")?;
+                        let next: Value = globals.get("__rmkNextFrame")?;
+                        let millis = if next.is_undefined() {
+                            0.0
+                        } else {
+                            Coerced::<f64>::from_js(&ctx, next)?.0
+                        };
+                        if millis.is_nan() || millis < 0.0 {
+                            return Err(rquickjs::Exception::throw_range(
+                                &ctx,
+                                "invalid next frame time",
+                            ));
+                        }
+                        let deadline = if framework_active.0 {
+                            0
+                        } else {
+                            (millis * 1000.0) as u64
+                        };
+                        Ok((active || framework_active.0, deadline))
+                    };
+                    status()
+                        .catch(&ctx)
+                        .map_err(|error| Error::JavaScript(error.to_string()))
+                })
+                .unwrap()?;
             profile_detail(4);
         }
         self.model = Some(model);
@@ -443,7 +453,7 @@ impl JsUi {
     }
 
     pub fn cache_info(&self) -> (bool, bool, usize, u32) {
-        self.handle
+        self.runtime
             .op_context()
             .core()
             .unwrap()
@@ -460,7 +470,7 @@ impl JsUi {
 
     #[cfg(not(target_os = "none"))]
     pub fn reference_pixels(&self) -> Vec<u16> {
-        let context = self.handle.op_context();
+        let context = self.runtime.op_context();
         let mut state = context.core_mut().expect("frame is not borrowed");
         state.ui.draw_uncached();
         let mut pixels = vec![0; WIDTH * HEIGHT];
@@ -474,7 +484,7 @@ impl JsUi {
     }
 
     pub fn contains_text(&self, expected: &str) -> bool {
-        let context = self.handle.op_context();
+        let context = self.runtime.op_context();
         let Ok(state) = context.core() else {
             return false;
         };
@@ -487,33 +497,6 @@ impl JsUi {
         }
         false
     }
-
-    fn exception(&self) -> Error {
-        let error = unsafe { CStr::from_ptr(mosaico_model_error(self.bridge.as_ptr())) };
-        Error::JavaScript(error.to_string_lossy().into_owned())
-    }
-}
-impl Drop for JsUi {
-    fn drop(&mut self) {
-        unsafe { mosaico_model_destroy(self.bridge.as_ptr()) };
-        self.js.shutdown();
-    }
-}
-
-// This program supplies the runtime C operation exports once per link unit.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn pocket_runtime_op(
-    runtime: *mut PocketRuntime,
-    op: u16,
-    args: *const c_void,
-    length: usize,
-    out: *mut PocketResult,
-) -> i32 {
-    unsafe { abi::pocket_runtime_op(runtime, op, args, length, out) }
-}
-#[unsafe(no_mangle)]
-unsafe extern "C" fn pocket_runtime_supports_op(runtime: *const PocketRuntime, op: u16) -> u32 {
-    unsafe { abi::pocket_runtime_supports_op(runtime, op) }
 }
 
 fn runtime_config() -> RuntimeConfig {
@@ -662,7 +645,7 @@ mod layout_differential {
         let mut fast = JsUi::new().unwrap();
         let mut general = JsUi::new().unwrap();
         general
-            .handle
+            .runtime
             .op_context()
             .core_mut()
             .unwrap()

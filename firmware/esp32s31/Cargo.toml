@@ -21,7 +21,7 @@ test = false
 bench = false
 
 [dependencies]
-pocket-embassy = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false, features = ["runner"] }
+pocket-embassy = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false, features = ["runner"] }
 pocket-raster = { path = "../../.deps/pocketjs/engine/raster", optional = true }
 pocket-render = { path = "../../.deps/pocketjs/engine/render" }
 pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers", optional = true }
@@ -77,9 +77,7 @@ debug = 2
 lto = "thin"
 opt-level = 3
 
-[patch."file:///Users/haobogu/Projects/keyboard/pocketjs"]
-pocket-guest-quickjs = { path = "../../.deps/pocketjs/engine/guest-quickjs" }
-pocket-embassy = { path = "../../.deps/pocketjs/platforms/embassy" }
+[patch."https://github.com/HaoboGu/pocketjs"]
 pocket-runtime = { path = "../../.deps/pocketjs/engine/runtime" }
 pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers" }
 pocket-render = { path = "../../.deps/pocketjs/engine/render" }
@@ -92,3 +90,6 @@ pocket-media = { path = "../../.deps/pocketjs/engine/modules/media" }
 # Only the unmerged retained dongle-state event is patched locally.
 [patch."https://github.com/rmk-rs/rmk"]
 rmk = { path = "../../.deps/rmk/rmk" }
+
+[profile.release.package.rquickjs-sys]
+opt-level = 2

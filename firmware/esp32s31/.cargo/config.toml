@@ -10,3 +10,11 @@ ESP_ALLOC_CONFIG_HEAP_ALGORITHM = "TLSF"
 ESP_ALLOC_CONFIG_MAX_REGIONS = "2"
 ESP_LOG = "info"
 KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }
+
+# rquickjs-sys owns the unmodified QuickJS-NG C build.
+CC_riscv32imafc_unknown_none_elf = { value = "../../.deps/riscv32-esp-elf/bin/riscv32-esp-elf-gcc", relative = true }
+AR_riscv32imafc_unknown_none_elf = { value = "../../.deps/riscv32-esp-elf/bin/riscv32-esp-elf-ar", relative = true }
+CFLAGS_riscv32imafc_unknown_none_elf = "-std=gnu11 -fno-strict-aliasing -mabi=ilp32f -D__STDC_NO_ATOMICS__=1 -Dprintf=pocket_libc_printf -Dvprintf=pocket_libc_vprintf -Dsprintf=pocket_libc_sprintf -Dsnprintf=pocket_libc_snprintf -Dvsnprintf=pocket_libc_vsnprintf"
+C_INCLUDE_PATH = { value = "../../.deps/riscv32-esp-elf/riscv32-esp-elf/include", relative = true }
+BINDGEN_EXTRA_CLANG_ARGS_riscv32imafc_unknown_none_elf = "--target=riscv32-unknown-elf -march=rv32imafc -mabi=ilp32f -D__STDC_NO_ATOMICS__=1"
+ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK = "true"
