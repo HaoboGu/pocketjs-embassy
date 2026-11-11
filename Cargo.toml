@@ -11,13 +11,13 @@ perf-no-cache = []
 perf-baseline = ["perf-no-cache"]
 
 [dependencies]
-pocket-guest-rquickjs = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false, features = ["rust-alloc"] }
-pocket-runtime = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false }
-pocket-drivers = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false }
+pocket-guest-rquickjs = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false, features = ["rust-alloc"] }
+pocket-runtime = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false }
+pocket-drivers = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false }
 
-pocket-raster = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false }
+pocket-raster = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false }
 
-pocket-render = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false }
+pocket-render = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false }
 heapless = "0.9"
 
 rquickjs = { version = "0.14", default-features = false, features = ["rust-alloc", "disable-assertions"] }
@@ -35,13 +35,3 @@ cc = "1.2"
 
 [profile.release]
 panic = "abort"
-
-[patch."https://github.com/HaoboGu/pocketjs"]
-pocket-runtime = { path = ".deps/pocketjs/engine/runtime" }
-pocket-drivers = { path = ".deps/pocketjs/engine/drivers" }
-pocket-render = { path = ".deps/pocketjs/engine/render" }
-pocket-raster = { path = ".deps/pocketjs/engine/raster" }
-pocketjs-core = { path = ".deps/pocketjs/engine/core" }
-pocket-spec = { path = ".deps/pocketjs/engine/spec" }
-pocket-package = { path = ".deps/pocketjs/engine/package" }
-pocket-media = { path = ".deps/pocketjs/engine/modules/media" }

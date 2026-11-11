@@ -5,11 +5,11 @@ cd "$(dirname "$0")/.."
     cd .deps/pocketjs
     bun test --conditions=browser tests/compiler-portability.test.ts tests/renderer.test.ts
     bunx --no-install tsc --noEmit
+    cargo test -p pocketjs-core -p pocket-runtime --features pocketjs-core/counters --release --locked
 )
 uv run --with 'pyusb>=1.3,<2' python -m unittest discover -s tools/tests
 cargo fmt --check
 cargo fmt --manifest-path firmware/esp32s31/Cargo.toml --check
-python3 tools/test-native.py
 cargo test --release --locked
 cargo clippy --release --locked --all-targets -- -D warnings
 cargo run --release --locked --example embassy

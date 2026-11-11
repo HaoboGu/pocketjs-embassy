@@ -21,10 +21,10 @@ test = false
 bench = false
 
 [dependencies]
-pocket-embassy = { git = "https://github.com/HaoboGu/pocketjs", rev = "acddb19a9544e57c3d6995602b3433d105a9929d", default-features = false, features = ["runner"] }
-pocket-raster = { path = "../../.deps/pocketjs/engine/raster", optional = true }
-pocket-render = { path = "../../.deps/pocketjs/engine/render" }
-pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers", optional = true }
+pocket-embassy = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", default-features = false, features = ["runner"] }
+pocket-raster = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", optional = true }
+pocket-render = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26" }
+pocket-drivers = { git = "https://github.com/HaoboGu/pocketjs", rev = "ce7569741ac57607fb1327651e5eed8b9256ca26", optional = true }
 esp32s31-pac = { package = "esp32s31", git = "https://github.com/esp-rs/esp-pacs.git", rev = "5cb8c50", optional = true }
 pocketjs-embassy = { path = "../.." }
 rmk = { git = "https://github.com/rmk-rs/rmk", rev = "c7195de6fe994da3651fdc20ee358ca4e69de11d", default-features = false, features = [
@@ -76,16 +76,6 @@ codegen-units = 1
 debug = 2
 lto = "thin"
 opt-level = 3
-
-[patch."https://github.com/HaoboGu/pocketjs"]
-pocket-runtime = { path = "../../.deps/pocketjs/engine/runtime" }
-pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers" }
-pocket-render = { path = "../../.deps/pocketjs/engine/render" }
-pocket-raster = { path = "../../.deps/pocketjs/engine/raster" }
-pocketjs-core = { path = "../../.deps/pocketjs/engine/core" }
-pocket-spec = { path = "../../.deps/pocketjs/engine/spec" }
-pocket-package = { path = "../../.deps/pocketjs/engine/package" }
-pocket-media = { path = "../../.deps/pocketjs/engine/modules/media" }
 
 # Only the unmerged retained dongle-state event is patched locally.
 [patch."https://github.com/rmk-rs/rmk"]

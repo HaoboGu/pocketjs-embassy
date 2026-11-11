@@ -2,19 +2,15 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
-pocketjs_url="https://github.com/HaoboGu/pocketjs"
-pocketjs_rev="acddb19a9544e57c3d6995602b3433d105a9929d"
+read -r pocketjs_url pocketjs_rev < <(
+    bun -e 'const dep = Bun.TOML.parse(await Bun.file("Cargo.toml").text()).dependencies["pocket-runtime"]; console.log(dep.git, dep.rev)'
+)
 mkdir -p .deps
 if [[ ! -d .deps/pocketjs/.git ]]; then
     git clone --no-checkout "$pocketjs_url" .deps/pocketjs
 fi
 git -C .deps/pocketjs fetch "$pocketjs_url" "$pocketjs_rev"
 git -C .deps/pocketjs checkout --detach "$pocketjs_rev"
-for patch in pocketjs-style-lookup.patch pocketjs-display-runtime.patch pocketjs-native-execution.patch; do
-    if ! git -C .deps/pocketjs apply --reverse --check "$repo_root/patches/$patch" 2>/dev/null; then
-        git -C .deps/pocketjs apply "$repo_root/patches/$patch"
-    fi
-done
 if [[ ! -d .deps/rmk/.git ]]; then
     git clone --filter=blob:none --no-checkout https://github.com/rmk-rs/rmk .deps/rmk
 fi

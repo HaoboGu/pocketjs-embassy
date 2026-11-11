@@ -481,6 +481,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pocket-drivers"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-spec",
 ]
@@ -488,7 +489,7 @@ dependencies = [
 [[package]]
 name = "pocket-guest-rquickjs"
 version = "0.16.0"
-source = "git+https://github.com/HaoboGu/pocketjs?rev=acddb19a9544e57c3d6995602b3433d105a9929d#acddb19a9544e57c3d6995602b3433d105a9929d"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "log",
  "pocket-drivers",
@@ -499,6 +500,7 @@ dependencies = [
 [[package]]
 name = "pocket-media"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-spec",
 ]
@@ -506,6 +508,7 @@ dependencies = [
 [[package]]
 name = "pocket-package"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-drivers",
  "pocket-spec",
@@ -514,6 +517,7 @@ dependencies = [
 [[package]]
 name = "pocket-raster"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-drivers",
  "pocket-render",
@@ -523,6 +527,7 @@ dependencies = [
 [[package]]
 name = "pocket-render"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-drivers",
  "pocket-spec",
@@ -531,6 +536,7 @@ dependencies = [
 [[package]]
 name = "pocket-runtime"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-drivers",
  "pocket-package",
@@ -542,10 +548,12 @@ dependencies = [
 [[package]]
 name = "pocket-spec"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 
 [[package]]
 name = "pocketjs-core"
 version = "0.16.0"
+source = "git+https://github.com/HaoboGu/pocketjs?rev=ce7569741ac57607fb1327651e5eed8b9256ca26#ce7569741ac57607fb1327651e5eed8b9256ca26"
 dependencies = [
  "pocket-drivers",
  "pocket-media",

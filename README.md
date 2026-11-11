@@ -37,14 +37,14 @@ Setup expands shallow RMK checkouts before building because the storage identifi
 also depends on Git path history; it invalidates cached RMK build metadata after
 that expansion.
 
-PocketJS's Embassy support is pinned to the published `feat/embassy` commit in
-[HaoboGu/pocketjs](https://github.com/HaoboGu/pocketjs/tree/feat/embassy).
-The guest and Embassy platform come from that Git dependency. Setup keeps a
-checkout under `.deps` for the remaining native renderer/compiler patches;
-no sibling checkout or local Git URL is required.
+All PocketJS Rust crates use the fixed Git revision from
+[HaoboGu/pocketjs's `perf/render-pipeline` branch](https://github.com/HaoboGu/pocketjs/tree/perf/render-pipeline).
+This branch includes Embassy support and the three rendering/framework optimizations.
+Cargo fetches the crates from Git without local PocketJS patches or path overrides.
 
-The setup script fetches pinned source into `.deps`, applies the recorded
-patches, and installs an isolated Espressif RISC-V C toolchain there. Generated
+Setup reads the SDK revision from `Cargo.toml` and checks out the same commit in
+`.deps/pocketjs` for the UI compiler and SDK tests. It also applies the RMK
+connection-state patch and installs the Espressif RISC-V C toolchain. Generated
 JS and font/style assets are checked in, so rebuilding them is only necessary
 after editing the UI.
 
@@ -286,7 +286,7 @@ and embedded `ui/generated` bundle remain unchanged.
 - [`ui/Status.ts`](ui/Status.ts): Solid signals and time-based UI state.
 - [`src/state.rs`](src/state.rs): typed state copied directly into JS values, without JSON parsing or evaluating key labels as code.
 - [`firmware/esp32s31/src/display`](firmware/esp32s31/src/display): RMK event folding and presentation.
-- PocketJS: remote `feat/embassy` commit `acddb19a9544e57c3d6995602b3433d105a9929d`, based on upstream `9b5f34e`.
+- PocketJS: remote `perf/render-pipeline` commit `ce7569741ac57607fb1327651e5eed8b9256ca26`, based on `feat/embassy` at `acddb19a`.
 - rquickjs / rquickjs-core / rquickjs-sys: released `0.14.0`, including the bundled QuickJS-NG engine.
 - RMK: upstream merge `c7195de6fe994da3651fdc20ee358ca4e69de11d` plus
   [`rmk-dongle-state.patch`](patches/rmk-dongle-state.patch).
@@ -300,27 +300,29 @@ fix ([#6615](https://github.com/esp-rs/esp-hal/pull/6615)) need no local support
 branch. PocketJS is pinned to the published feature commit; the other pins identify official upstream commits.
 RMK's local Cargo override contains only the retained dongle-state event patch.
 
-The remaining patches have separate ownership:
+The PocketJS optimizations are separate commits on the performance branch:
 
-| Patch | Scope | Upstream preparation |
-| --- | --- | --- |
-| `pocketjs-style-lookup.patch` | Exact class lookup and style-table revision | General PocketJS optimization |
-| `pocketjs-display-runtime.patch` | Native Solid bindings and pending-work scheduling | General PocketJS optimization |
-| `pocketjs-native-execution.patch` | Layout, command replay, damage, raster and native dispatch | Split by subsystem for PocketJS review |
-| `rmk-dongle-state.patch` | Retain connection state for late display subscribers | Independent RMK event fix |
+| Commit | Scope |
+| --- | --- |
+| [`7ebaa20c`](https://github.com/HaoboGu/pocketjs/commit/7ebaa20c) | Exact class lookup and style-table revision |
+| [`4c2549f7`](https://github.com/HaoboGu/pocketjs/commit/4c2549f7) | Native Solid bindings and pending-work scheduling |
+| [`ce756974`](https://github.com/HaoboGu/pocketjs/commit/ce756974) | Layout, command replay, damage, raster and native dispatch |
+
+The only local source patch is [`rmk-dongle-state.patch`](patches/rmk-dongle-state.patch),
+which retains the connection state for late display subscribers.
 
 The engine comes from Cargo's rquickjs release; setup no longer fetches, rewrites
 or patches QuickJS. SRAM placement is a board linker policy. Optional diagnostics
 measure the state bridge, complete guest turn, rendering and DMA stages.
 
-The [native-execution patch](patches/pocketjs-native-execution.patch) tracks paint mutations
+The [native-rendering commit](https://github.com/HaoboGu/pocketjs/commit/ce756974) tracks paint mutations
 and replays unchanged small view/text groups. It retains at most 512 node slots
 and 256 command words per group; native/streamed fonts and external image or
 physics content keep the full traversal. Resource changes and layout changes
-invalidate the affected results. `tools/test-native.py` checks native behavior;
+invalidate the affected results. `tools/verify.sh` runs the SDK's native tests;
 the UI pixel reference uses a separate uncached traversal.
 
-The same patch places eligible absolute leaves from their parent geometry without
+The same commit places eligible absolute leaves from their parent geometry without
 running the flex solver. Percentages, margins, min/max constraints, flow layout,
 native/streamed text and explicit layout regions keep the general path. Text
 remeasurement retains solver results when its dimensions are unchanged.
@@ -332,7 +334,7 @@ interface keeps resources borrowed until rendering completes; a cancelled frame
 forces a complete retry. Framebuffers are aligned for DMA cache maintenance.
 None of these paths depends on the status screen's labels, node IDs or palette.
 
-The [display-runtime patch](patches/pocketjs-display-runtime.patch) preserves normal
+The [framework commit](https://github.com/HaoboGu/pocketjs/commit/4c2549f7) preserves normal
 Solid conditionals that own nodes, reduces pure text-binding overhead, and detects
 pending framework work. Literal class branches compile to retained bindings;
 style-table changes invalidate their resolved IDs, while dynamic classes and
