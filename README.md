@@ -324,9 +324,10 @@ the UI pixel reference uses a separate uncached traversal.
 The same patch places eligible absolute leaves from their parent geometry without
 running the flex solver. Percentages, margins, min/max constraints, flow layout,
 native/streamed text and explicit layout regions keep the general path. Text
-remeasurement retains solver results when its dimensions are unchanged. The C
-operation bridge decodes up to six arguments on the stack and validates them once;
-public entry points retain argument and reentrancy checks. Damage planning retains
+remeasurement retains solver results when its dimensions are unchanged. The patch
+also contains C ABI argument-decoding optimizations that the current rquickjs
+embedding does not use; separate those changes before upstream submission.
+Damage planning retains
 decoded operations without searching for pixel moves that this display would repaint.
 A row index selects commands intersecting each dirty region. An opaque rectangle
 covering the region makes the preceding clear unnecessary. The async renderer
@@ -341,9 +342,9 @@ style-table changes invalidate their resolved IDs, while dynamic classes and
 custom resolvers retain their existing behavior. These changes apply to replacement JS interfaces as well
 as the current status screen. The host disables unused input-tape recording;
 set `globalThis.__pocketRecordInput = true` before mounting to enable it.
-The C SDK link uses esp-hal's stack-protection implementation. The application
-uses the lower-level `Handle`/`CGuest` lifecycle with embedded bundles, rather
-than the full application-package admission API.
+The board link reuses esp-hal's stack-protection implementation. The application
+owns a `Runtime` and `RquickjsGuest`, mounts embedded or uploaded bundles through
+`GuestEnvironment`, and drives guest and native frame stages from its display loop.
 
 Receiver, panel and UI code were adapted from the RMK Mosaico worktree at
 `10410241b`. GPL-3.0-or-later; dependency/font notices are in [`licenses`](licenses),
