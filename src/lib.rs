@@ -1,7 +1,6 @@
 #![no_std]
 
 extern crate alloc;
-mod c_alloc;
 pub mod reload;
 pub mod state;
 
@@ -10,11 +9,12 @@ use core::{
     ffi::{CStr, c_char, c_void},
     ptr::NonNull,
 };
-use pocket_drivers::abi::{PocketGuestV1, PocketResult, PocketRuntime};
+use pocket_drivers::abi::{PocketResult, PocketRuntime};
+use pocket_guest_quickjs::{CreateError, Limits, QuickJsGuest};
 use pocket_render::damage::{DamagePlan, DamageTarget, DamageTracker};
 use pocket_runtime::{
     Cow, Guest, GuestEnvironment, GuestFrame, InputClasses, Profile, RuntimeConfig, RuntimeError,
-    abi::{self, CGuest, Handle},
+    abi::{self, Handle},
 };
 use state::Model;
 
@@ -51,14 +51,12 @@ struct NativeModel {
 }
 
 unsafe extern "C" {
-    fn experiment_guest_create(heap_limit: usize, stack_limit: usize) -> *mut c_void;
-    fn experiment_guest_binding(guest: *mut c_void) -> *mut c_void;
-    fn experiment_guest_budget(guest: *mut c_void, polls: u32);
-    fn experiment_guest_error(guest: *mut c_void) -> *const c_char;
-    fn experiment_guest_destroy(guest: *mut c_void);
-    fn experiment_guest_input(guest: *mut c_void, state: *const NativeModel, now_us: u64) -> i32;
-    fn experiment_guest_animating(guest: *mut c_void, next_frame_us: *mut u64) -> i32;
-    fn pocket_guest_quickjs_vtable() -> *const PocketGuestV1;
+    fn mosaico_model_configure(context: *mut c_void, binding: *mut c_void);
+    fn mosaico_model_create(context: *mut c_void) -> *mut c_void;
+    fn mosaico_model_error(bridge: *mut c_void) -> *const c_char;
+    fn mosaico_model_destroy(bridge: *mut c_void);
+    fn mosaico_model_input(bridge: *mut c_void, state: *const NativeModel, now_us: u64) -> i32;
+    fn mosaico_model_animating(bridge: *mut c_void, next_frame_us: *mut u64) -> i32;
 }
 
 #[inline(always)]
@@ -87,24 +85,34 @@ fn profile_detail(phase: u32) {
     let _ = phase;
 }
 
+// Keep native drawing separate from the guest bridge for code generation.
+#[inline(never)]
+fn draw_native(state: &mut pocket_runtime::CoreState, advance: bool) {
+    if advance {
+        state.ui.tick();
+    }
+    state.ui.draw();
+}
+
 #[derive(Debug)]
 pub enum Error {
     Allocation,
-    Serialization(serde_json::Error),
     Runtime(RuntimeError),
     JavaScript(String),
 }
 impl From<RuntimeError> for Error {
-    fn from(value: RuntimeError) -> Self {
-        Self::Runtime(value)
+    fn from(error: RuntimeError) -> Self {
+        Self::Runtime(error)
     }
 }
 
 /// One owner thread drives the QuickJS guest and its native UI.
 pub struct JsUi {
+    // The guest is destroyed before the handle and borrowed package storage.
+    js: QuickJsGuest,
     handle: Box<Handle>,
-    guest: CGuest,
-    engine: NonNull<c_void>,
+    assets: Cow<'static, [u8]>,
+    bridge: NonNull<c_void>,
     pixels: Framebuffer,
     model: Option<Model>,
     clock_tick: u64,
@@ -113,8 +121,6 @@ pub struct JsUi {
     next_js_us: u64,
     damage: DamageTracker<8>,
     pending_frame: bool,
-    // QuickJS borrows the package until guest shutdown.
-    assets: Cow<'static, [u8]>,
 }
 #[repr(C, align(64))]
 #[derive(Clone)]
@@ -170,26 +176,31 @@ impl JsUi {
 
     fn create(javascript: &[u8], assets: Cow<'static, [u8]>) -> Result<Self, Error> {
         let handle = Handle::new(runtime_config())?;
-        let engine =
-            NonNull::new(unsafe { experiment_guest_create(4 * 1024 * 1024, JS_STACK_LIMIT) })
-                .ok_or(Error::Allocation)?;
-        let guest = match unsafe {
-            CGuest::new(
-                pocket_guest_quickjs_vtable(),
-                experiment_guest_binding(engine.as_ptr()),
+        let mut js = unsafe {
+            QuickJsGuest::new(
                 handle.as_ptr(),
+                Limits {
+                    heap_bytes: 4 * 1024 * 1024,
+                    stack_bytes: JS_STACK_LIMIT,
+                    interrupt_polls: 256,
+                },
             )
-        } {
-            Ok(guest) => guest,
-            Err(error) => {
-                unsafe { experiment_guest_destroy(engine.as_ptr()) };
-                return Err(Error::Runtime(error.into()));
-            }
-        };
+        }
+        .map_err(|error| match error {
+            CreateError::Allocation => Error::Allocation,
+            CreateError::InvalidLimits => Error::Runtime(RuntimeError::InvalidConfiguration),
+            CreateError::Binding(error) => Error::Runtime(error.into()),
+        })?;
+        unsafe {
+            mosaico_model_configure(js.context_ptr(), js.binding_ptr());
+        }
+        let bridge = NonNull::new(unsafe { mosaico_model_create(js.context_ptr()) })
+            .ok_or(Error::Allocation)?;
         let mut ui = Self {
+            js,
             handle,
-            guest,
-            engine,
+            assets,
+            bridge,
             pixels: Framebuffer::new(),
             model: None,
             clock_tick: 0,
@@ -198,7 +209,6 @@ impl JsUi {
             next_js_us: 0,
             damage: DamageTracker::new(),
             pending_frame: false,
-            assets,
         };
         let context = ui.handle.op_context();
         context
@@ -226,17 +236,18 @@ impl JsUi {
             worker_javascript: &[],
             assets: None,
         };
-        unsafe { experiment_guest_budget(ui.engine.as_ptr(), 256) };
-        if ui.guest.initialize(context, &environment).is_err() {
-            return Err(ui.exception());
-        }
+        ui.js
+            .initialize(context, &environment)
+            .map_err(|_| Error::JavaScript(ui.js.last_error()))?;
         ui.evaluate(javascript)?;
         Ok(ui)
     }
 
     pub fn evaluate(&mut self, source: &[u8]) -> Result<(), Error> {
-        unsafe { experiment_guest_budget(self.engine.as_ptr(), 256) };
-        self.guest.evaluate(source).map_err(|_| self.exception())?;
+        self.js.set_interrupt_budget(256);
+        self.js
+            .evaluate(source)
+            .map_err(|_| Error::JavaScript(self.js.last_error()))?;
         self.animating = true;
         self.next_js_us = 0;
         Ok(())
@@ -356,13 +367,13 @@ impl JsUi {
                 battery_right: model.battery_right,
                 charging: u32::from(model.charging_left) | (u32::from(model.charging_right) << 1),
             });
-            unsafe { experiment_guest_budget(self.engine.as_ptr(), 32) };
+            self.js.set_interrupt_budget(32);
             let pointer = input
                 .as_ref()
                 .map_or(core::ptr::null(), core::ptr::from_ref);
             profile_detail(1);
             // All borrowed strings are copied into JS values during this call.
-            if unsafe { experiment_guest_input(self.engine.as_ptr(), pointer, now_us) } != 0 {
+            if unsafe { mosaico_model_input(self.bridge.as_ptr(), pointer, now_us) } != 0 {
                 return Err(self.exception());
             }
             profile_detail(2);
@@ -377,12 +388,12 @@ impl JsUi {
                 motion: None,
                 text: &[],
             };
-            if self.guest.frame(&frame).is_err() {
-                return Err(self.exception());
-            }
+            self.js
+                .frame(&frame)
+                .map_err(|_| Error::JavaScript(self.js.last_error()))?;
             profile_detail(3);
             let active =
-                unsafe { experiment_guest_animating(self.engine.as_ptr(), &mut self.next_js_us) };
+                unsafe { mosaico_model_animating(self.bridge.as_ptr(), &mut self.next_js_us) };
             if active < 0 {
                 return Err(self.exception());
             }
@@ -393,10 +404,7 @@ impl JsUi {
         self.clock_tick = target_tick;
         profile_frame(2);
         let mut state = context.core_mut()?;
-        if ticks != 0 || !was_animating {
-            state.ui.tick();
-        }
-        state.ui.draw();
+        draw_native(&mut state, ticks != 0 || !was_animating);
         let words = &state.ui.current_draw_list().words;
         if force {
             self.damage.invalidate();
@@ -481,18 +489,18 @@ impl JsUi {
     }
 
     fn exception(&self) -> Error {
-        let error = unsafe { CStr::from_ptr(experiment_guest_error(self.engine.as_ptr())) };
+        let error = unsafe { CStr::from_ptr(mosaico_model_error(self.bridge.as_ptr())) };
         Error::JavaScript(error.to_string_lossy().into_owned())
     }
 }
 impl Drop for JsUi {
     fn drop(&mut self) {
-        self.guest.shutdown();
-        unsafe { experiment_guest_destroy(self.engine.as_ptr()) };
+        unsafe { mosaico_model_destroy(self.bridge.as_ptr()) };
+        self.js.shutdown();
     }
 }
 
-// The C guest uses these two operations; the upstream ABI owns their validation.
+// This program supplies the runtime C operation exports once per link unit.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn pocket_runtime_op(
     runtime: *mut PocketRuntime,

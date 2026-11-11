@@ -1,34 +1,24 @@
+#[path = ".deps/pocketjs/engine/guest-quickjs/build/sources.rs"]
+mod quickjs_sources;
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let qjs = root.join(".deps/quickjs");
+    let qjs = PathBuf::from(env::var_os("POCKET_QUICKJS_DIR").expect("run tools/setup.sh first"));
     let pocket = root.join(".deps/pocketjs");
     assert!(qjs.join("quickjs.c").exists(), "run tools/setup.sh first");
     let output_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let mut build = cc::Build::new();
+    quickjs_sources::add(
+        &mut build,
+        &pocket,
+        &qjs,
+        env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none"),
+    );
+    build.warnings(false);
     build
-        .include(&qjs)
-        .include(pocket.join("contracts/generated"))
-        .include(pocket.join("engine/guest-quickjs/include"))
-        .include(pocket.join("engine/guest-quickjs/src"))
-        .flag_if_supported("-std=gnu11")
-        .flag_if_supported("-fno-strict-aliasing")
-        .define("NDEBUG", None)
-        .define("__STDC_NO_ATOMICS__", "1")
-        .define("malloc", "pocket_c_malloc")
-        .define("calloc", "pocket_c_calloc")
-        .define("realloc", "pocket_c_realloc")
-        .define("free", "pocket_c_free")
-        .define("malloc_size", "pocket_c_usable_size")
-        .define("malloc_usable_size", "pocket_c_usable_size")
-        .warnings(false);
-    for file in ["quickjs.c", "dtoa.c", "libregexp.c", "libunicode.c"] {
-        build.file(qjs.join(file));
-    }
-    build
-        .file(pocket.join("engine/guest-quickjs/src/guest.c"))
-        .file(root.join("native/guest.c"));
+        .file(root.join("native/model.c"))
+        .file(root.join("native/support.c"));
     if env::var("TARGET").unwrap() == "riscv32imafc-unknown-none-elf" {
         let toolchain = root.join(".deps/riscv32-esp-elf/bin");
         for function in ["printf", "vprintf", "sprintf", "snprintf", "vsnprintf"] {
@@ -84,13 +74,12 @@ fn main() {
             }
         }
     }
-    build.compile("pocket_quickjs");
+    build.compile("mosaico_quickjs");
     if env::var("TARGET").unwrap() == "riscv32imafc-unknown-none-elf" {
         for library in ["m", "pocket_c", "nosys", "gcc"] {
             println!("cargo:rustc-link-lib=static:-bundle={library}");
         }
     }
-    println!("cargo:rerun-if-changed=native/guest.c");
-    println!("cargo:rerun-if-changed=.deps/quickjs/quickjs.c");
-    println!("cargo:rerun-if-changed=.deps/pocketjs/engine/guest-quickjs/src/guest.c");
+    println!("cargo:rerun-if-changed=native/model.c");
+    println!("cargo:rerun-if-changed=native/support.c");
 }

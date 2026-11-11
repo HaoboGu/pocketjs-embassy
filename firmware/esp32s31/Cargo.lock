@@ -2257,6 +2257,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocket-embassy"
+version = "0.16.0"
+dependencies = [
+ "embassy-time",
+ "pocket-drivers",
+ "pocket-runtime",
+]
+
+[[package]]
+name = "pocket-guest-quickjs"
+version = "0.16.0"
+dependencies = [
+ "pocket-drivers",
+ "pocket-runtime",
+]
+
+[[package]]
 name = "pocket-media"
 version = "0.16.0"
 dependencies = [
@@ -2322,6 +2339,7 @@ dependencies = [
  "cc",
  "heapless 0.9.3",
  "pocket-drivers",
+ "pocket-guest-quickjs",
  "pocket-raster",
  "pocket-render",
  "pocket-runtime",
@@ -2678,6 +2696,7 @@ dependencies = [
  "heapless 0.9.3",
  "log",
  "pocket-drivers",
+ "pocket-embassy",
  "pocket-raster",
  "pocket-render",
  "pocketjs-embassy",

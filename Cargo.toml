@@ -11,12 +11,13 @@ perf-no-cache = []
 perf-baseline = ["perf-no-cache"]
 
 [dependencies]
-pocket-runtime = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
-pocket-drivers = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+pocket-guest-quickjs = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false }
+pocket-runtime = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false }
+pocket-drivers = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false }
 
-pocket-raster = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+pocket-raster = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false }
 
-pocket-render = { git = "https://github.com/pocket-nexus/pocketjs", rev = "becc0e21b678384ec31efa2b4f8d0be3aeefad5f", default-features = false }
+pocket-render = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false }
 heapless = { version = "0.9", features = ["serde"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
@@ -32,7 +33,8 @@ cc = "1.2"
 [profile.release]
 panic = "abort"
 
-[patch."https://github.com/pocket-nexus/pocketjs"]
+[patch."file:///Users/haobogu/Projects/keyboard/pocketjs"]
+pocket-guest-quickjs = { path = ".deps/pocketjs/engine/guest-quickjs" }
 pocket-runtime = { path = ".deps/pocketjs/engine/runtime" }
 pocket-drivers = { path = ".deps/pocketjs/engine/drivers" }
 pocket-render = { path = ".deps/pocketjs/engine/render" }

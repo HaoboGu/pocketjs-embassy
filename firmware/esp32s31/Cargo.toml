@@ -21,6 +21,7 @@ test = false
 bench = false
 
 [dependencies]
+pocket-embassy = { git = "file:///Users/haobogu/Projects/keyboard/pocketjs", rev = "41baa45fcc8b5d72194948952779d379085ecccf", default-features = false, features = ["runner"] }
 pocket-raster = { path = "../../.deps/pocketjs/engine/raster", optional = true }
 pocket-render = { path = "../../.deps/pocketjs/engine/render" }
 pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers", optional = true }
@@ -76,7 +77,9 @@ debug = 2
 lto = "thin"
 opt-level = 3
 
-[patch."https://github.com/pocket-nexus/pocketjs"]
+[patch."file:///Users/haobogu/Projects/keyboard/pocketjs"]
+pocket-guest-quickjs = { path = "../../.deps/pocketjs/engine/guest-quickjs" }
+pocket-embassy = { path = "../../.deps/pocketjs/platforms/embassy" }
 pocket-runtime = { path = "../../.deps/pocketjs/engine/runtime" }
 pocket-drivers = { path = "../../.deps/pocketjs/engine/drivers" }
 pocket-render = { path = "../../.deps/pocketjs/engine/render" }

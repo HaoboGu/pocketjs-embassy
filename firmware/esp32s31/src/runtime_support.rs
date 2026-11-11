@@ -1,8 +1,6 @@
-use embassy_time::Instant;
-
 #[unsafe(no_mangle)]
 extern "C" fn pocket_uptime_us() -> u64 {
-    Instant::now().as_micros()
+    embassy_time::Instant::now().as_micros()
 }
 
 #[unsafe(no_mangle)]

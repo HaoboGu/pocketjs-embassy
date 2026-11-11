@@ -1,7 +1,6 @@
 #include "pocket_guest_quickjs.h"
 #include <stdlib.h>
 #include <math.h>
-
 #ifdef POCKET_FRAME_PROFILE
 extern void pocket_app_phase(uint32_t phase);
 extern void pocket_guest_phase(uint32_t phase);
@@ -27,163 +26,40 @@ static const char *const input_names[INPUT_ATOM_COUNT] = {
     "charging_left", "charging_right"
 };
 
-struct experiment_guest {
-    JSRuntime *runtime;
+struct mosaico_model {
     JSContext *context;
-    pocket_guest_quickjs *binding;
-    unsigned remaining;
     char bridge_error[256];
     JSValue global;
     JSAtom atoms[INPUT_ATOM_COUNT];
 };
-
-static int interrupt(JSRuntime *runtime, void *opaque) {
-    (void)runtime;
-    struct experiment_guest *guest = opaque;
-    if (guest->remaining == 0) return 1;
-    guest->remaining--;
-    return 0;
-}
-
-extern size_t pocket_c_usable_size(const void *pointer);
-static void *guest_calloc(void *opaque, size_t count, size_t size) {
-    (void)opaque;
-    return calloc(count, size);
-}
-static void *guest_malloc(void *opaque, size_t size) {
-    (void)opaque;
-    return malloc(size);
-}
-static void guest_free(void *opaque, void *pointer) {
-    (void)opaque;
-    free(pointer);
-}
-static void *guest_realloc(void *opaque, void *pointer, size_t size) {
-    (void)opaque;
-    return realloc(pointer, size);
-}
-static const JSMallocFunctions guest_allocator = {
-    guest_calloc, guest_malloc, guest_free, guest_realloc, pocket_c_usable_size
-};
-
-void *experiment_guest_create(size_t heap_limit, size_t stack_limit) {
-    struct experiment_guest *guest = calloc(1, sizeof *guest);
-    if (!guest) return NULL;
-    guest->runtime = JS_NewRuntime2(&guest_allocator, NULL);
-    if (!guest->runtime) { free(guest); return NULL; }
-    JS_SetMemoryLimit(guest->runtime, heap_limit);
-    JS_SetMaxStackSize(guest->runtime, stack_limit);
-    guest->context = JS_NewContext(guest->runtime);
-    if (!guest->context) { JS_FreeRuntime(guest->runtime); free(guest); return NULL; }
-    JSValue host_global = JS_GetGlobalObject(guest->context);
-    JS_SetPropertyStr(guest->context, host_global, "__pocketRecordInput", JS_FALSE);
-    JS_FreeValue(guest->context, host_global);
-    guest->binding = pocket_guest_quickjs_attach(guest->context, POCKET_QJS_CANONICAL);
-    if (!guest->binding) {
-        JS_FreeContext(guest->context); JS_FreeRuntime(guest->runtime); free(guest); return NULL;
-    }
+void mosaico_model_configure(JSContext *context, pocket_guest_quickjs *binding) {
+    JSValue global = JS_GetGlobalObject(context);
+    JS_SetPropertyStr(context, global, "__pocketRecordInput", JS_FALSE);
 #ifdef POCKET_FRAME_PROFILE
-    pocket_guest_quickjs_set_phase_hook(guest->binding, profile_guest, NULL);
-    JSValue global = JS_GetGlobalObject(guest->context);
-    JS_SetPropertyStr(guest->context, global, "__pocketProfile", JS_NewCFunction(guest->context, profile_app, "__pocketProfile", 1));
-    JS_FreeValue(guest->context, global);
+    pocket_guest_quickjs_set_phase_hook(binding, profile_guest, NULL);
+    JS_SetPropertyStr(context, global, "__pocketProfile", JS_NewCFunction(context, profile_app, "__pocketProfile", 1));
+#else
+    (void)binding;
 #endif
-    guest->global = JS_GetGlobalObject(guest->context);
-    JS_SetInterruptHandler(guest->runtime, interrupt, guest);
+    JS_FreeValue(context, global);
+}
+void *mosaico_model_create(JSContext *context) {
+    struct mosaico_model *guest = calloc(1, sizeof *guest);
+    if (!guest) return NULL;
+    guest->context = context;
+    guest->global = JS_GetGlobalObject(context);
     return guest;
 }
-void *experiment_guest_binding(void *opaque) {
-    return ((struct experiment_guest *)opaque)->binding;
-}
-void experiment_guest_budget(void *opaque, unsigned polls) {
-    struct experiment_guest *guest = opaque;
-    guest->remaining = polls;
-    guest->bridge_error[0] = 0;
-}
-const char *experiment_guest_error(void *opaque) {
-    struct experiment_guest *guest = opaque;
-    return guest->bridge_error[0] ? guest->bridge_error : pocket_guest_quickjs_error(guest->binding);
-}
-void experiment_guest_destroy(void *opaque) {
-    struct experiment_guest *guest = opaque;
-    pocket_guest_quickjs_destroy(guest->binding);
+void mosaico_model_destroy(void *opaque) {
+    struct mosaico_model *guest = opaque;
     for (unsigned i = 0; i < INPUT_ATOM_COUNT; i++) JS_FreeAtom(guest->context, guest->atoms[i]);
     JS_FreeValue(guest->context, guest->global);
-    JS_FreeContext(guest->context);
-    JS_FreeRuntime(guest->runtime);
     free(guest);
 }
-
-#ifdef POCKET_EMBEDDED
-#include <sys/time.h>
-#include <time.h>
-#include <errno.h>
-#include <reent.h>
-extern uint64_t pocket_uptime_us(void);
-
-// Linked newlib is owned by the GUI task; radio calls use the ROM syscall table.
-struct _reent *__getreent(void) {
-    return _impure_ptr;
+const char *mosaico_model_error(void *opaque) {
+    return ((struct mosaico_model *)opaque)->bridge_error;
 }
-
-int clock_gettime(clockid_t clock, struct timespec *value) {
-    if (clock != CLOCK_MONOTONIC) { errno = EINVAL; return -1; }
-    const uint64_t micros = pocket_uptime_us();
-    value->tv_sec = micros / 1000000;
-    value->tv_nsec = (micros % 1000000) * 1000;
-    return 0;
-}
-int _gettimeofday(struct timeval *value, void *timezone) {
-    (void)timezone;
-    const uint64_t micros = pocket_uptime_us();
-    value->tv_sec = micros / 1000000;
-    value->tv_usec = micros % 1000000;
-    return 0;
-}
-#endif
-
-#ifdef POCKET_EMBEDDED
-#undef malloc
-#undef calloc
-#undef realloc
-#undef free
-extern void *malloc(size_t);
-extern void *calloc(size_t, size_t);
-extern void *realloc(void *, size_t);
-extern void free(void *);
-#include <errno.h>
-#include <reent.h>
-#include <sys/types.h>
-extern void pocket_uart_write(const uint8_t *bytes, size_t length);
-
-void *_malloc_r(struct _reent *reent, size_t size) {
-    void *pointer = malloc(size);
-    if (!pointer) reent->_errno = ENOMEM;
-    return pointer;
-}
-void *_calloc_r(struct _reent *reent, size_t count, size_t size) {
-    void *pointer = calloc(count, size);
-    if (!pointer) reent->_errno = ENOMEM;
-    return pointer;
-}
-void *_realloc_r(struct _reent *reent, void *pointer, size_t size) {
-    void *next = realloc(pointer, size);
-    if (!next && size) reent->_errno = ENOMEM;
-    return next;
-}
-void _free_r(struct _reent *reent, void *pointer) {
-    (void)reent;
-    free(pointer);
-}
-ssize_t _write(int descriptor, const void *bytes, size_t length) {
-    if (descriptor != 1 && descriptor != 2) { errno = EBADF; return -1; }
-    pocket_uart_write(bytes, length);
-    return length;
-}
-#endif
-
-
-static int bridge_failure(struct experiment_guest *guest) {
+static int bridge_failure(struct mosaico_model *guest) {
     JSContext *ctx = guest->context;
     JSValue error = JS_GetException(ctx);
     const char *message = JS_ToCString(ctx, error);
@@ -199,8 +75,8 @@ struct input_model {
     int32_t battery_left, battery_right;
     uint32_t charging;
 };
-int experiment_guest_input(void *opaque, const struct input_model *state, uint64_t now_us) {
-    struct experiment_guest *guest = opaque;
+int mosaico_model_input(void *opaque, const struct input_model *state, uint64_t now_us) {
+    struct mosaico_model *guest = opaque;
     JSContext *ctx = guest->context;
     JSValue value = JS_UNDEFINED, keys = JS_UNDEFINED;
     if (!guest->atoms[TIME]) {
@@ -245,8 +121,8 @@ failed:
     JS_FreeValue(ctx, keys); JS_FreeValue(ctx, value);
     return bridge_failure(guest);
 }
-int experiment_guest_animating(void *opaque, uint64_t *next_frame_us) {
-    struct experiment_guest *guest = opaque;
+int mosaico_model_animating(void *opaque, uint64_t *next_frame_us) {
+    struct mosaico_model *guest = opaque;
     JSContext *ctx = guest->context;
     JSValue global = guest->global;
     JSValue value = JS_GetProperty(ctx, global, guest->atoms[ANIMATING]);

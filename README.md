@@ -31,6 +31,15 @@ Use the same configurator protocol on the keyboard and receiver. Pairing storage
 remains at `0xff0000` in the last 64 KiB of the 16 MiB flash. Changing RMK's
 commit or enabled features changes its storage schema and can require pairing again;
 keeping the flash partition intact alone does not prevent that reset.
+Setup expands shallow RMK checkouts before building because the storage identifier
+also depends on Git path history; it invalidates cached RMK build metadata after
+that expansion.
+
+The Embassy host lives on the local PocketJS branch `feat/embassy` at
+`/Users/haobogu/Projects/keyboard/pocketjs`. Cargo and `tools/setup.sh` currently
+pin that local Git repository for development. This checkout requires that sibling
+repository; replace the file Git URL with a published fork URL before distributing
+this revision to other machines.
 
 The setup script fetches pinned source into `.deps`, applies the recorded
 patches, and installs an isolated Espressif RISC-V C toolchain there. Generated
@@ -61,7 +70,7 @@ JS errors, execution budgets and immutable asset buffers. The RMK patch includes
 a regression test for a display subscribing after the keyboard has connected.
 
 The Vial build has been tested on ESP-Mosaico: the display works, the keyboard
-reconnects, and Vial returns protocol version 9. Rynk is build-checked. Long-duration
+reconnects, and its VIA compatibility endpoint returns protocol version 9. Rynk is build-checked. Long-duration
 radio testing and stack high-water measurements remain separate from these checks.
 
 ## Flash
@@ -122,7 +131,12 @@ names. The controller's 72 KiB heap budget matches RMK/esp-hal BLE examples; it 
 measured minimum. UART logs report free internal memory
 after controller initialization; debug logging also includes render timing.
 
-The C port supplies a monotonic `clock_gettime` and newlib reentrancy state.
+PocketJS's `pocket-guest-quickjs` crate owns the QuickJS realm and implements the
+standard `Guest` lifecycle. `pocket-embassy` supplies Embassy pacing and a separate
+canonical display adapter. This application keeps its optimized rendering loop,
+RMK state bridge, runtime/package ownership, C exports and ESP/newlib link settings.
+The program builds the C engine through the shared source helper; setup explicitly
+prepares its pinned bare-metal source. The board supplies clock and libc hooks.
 QuickJS time reads use device uptime; they do not provide a wall-clock date.
 
 A live `JsUi` stays on its owning executor and is not `Send`. JS evaluation and
@@ -266,7 +280,7 @@ and embedded `ui/generated` bundle remain unchanged.
 - [`ui/Status.ts`](ui/Status.ts): Solid signals and time-based UI state.
 - [`src/state.rs`](src/state.rs): typed state copied directly into JS values, without JSON parsing or evaluating key labels as code.
 - [`firmware/esp32s31/src/display`](firmware/esp32s31/src/display): RMK event folding and presentation.
-- PocketJS: `becc0e21b678384ec31efa2b4f8d0be3aeefad5f`.
+- PocketJS: local `feat/embassy` commit `41baa45fcc8b5d72194948952779d379085ecccf`, based on upstream `9b5f34e`.
 - QuickJS-NG: `d8e1cc68f71fba2e084a18408ab2e6f9838b4d20` (includes upstream immutable-buffer and newlib fixes).
 - RMK: upstream merge `c7195de6fe994da3651fdc20ee358ca4e69de11d` plus
   [`rmk-dongle-state.patch`](patches/rmk-dongle-state.patch).
@@ -277,7 +291,7 @@ and embedded `ui/generated` bundle remain unchanged.
 Merged platform changes come from official repositories: RMK's ESP32-S31
 support ([#1393](https://github.com/rmk-rs/rmk/pull/1393)) and the ESP USB RX FIFO
 fix ([#6615](https://github.com/esp-rs/esp-hal/pull/6615)) need no local support
-branch. Pins identify reproducible upstream commits rather than moving branches.
+branch. The PocketJS development pin identifies the local feature commit; the other pins identify upstream commits.
 RMK's local Cargo override contains only the retained dongle-state event patch.
 
 The remaining patches have separate ownership:
@@ -287,7 +301,6 @@ The remaining patches have separate ownership:
 | `pocketjs-style-lookup.patch` | Exact class lookup and style-table revision | General PocketJS optimization |
 | `pocketjs-display-runtime.patch` | Native Solid bindings and pending-work scheduling | General PocketJS optimization |
 | `pocketjs-native-execution.patch` | Layout, command replay, damage, raster and ABI paths | Split by subsystem for PocketJS review |
-| `pocketjs-quickjs-compat.patch` | Borrowed package buffers with the QuickJS-NG 0.16+ C API | General guest SDK compatibility |
 | `rmk-dongle-state.patch` | Retain connection state for late display subscribers | Independent RMK event fix |
 | `quickjs-iram.patch` | Put interpreter and hot helpers in SRAM | Mosaico-specific placement policy |
 | `pocketjs-profiler.patch` | Optional guest native-op timing hooks | Local measurement integration |
@@ -296,8 +309,7 @@ QuickJS-NG's upstream commits `249bb27` and `eb52863` provide immutable
 TypedArray and ArrayBuffer semantics; [#1657](https://github.com/quickjs-ng/quickjs/pull/1657)
 fixes the newlib `int32_t` pointer mismatches. These duplicate local changes were
 removed, including `quickjs-port.patch`. In QuickJS itself, only the board-specific
-[SRAM placement patch](patches/quickjs-iram.patch) remains. The separate
-[PocketJS guest patch](patches/pocketjs-quickjs-compat.patch) adapts the new external
+[SRAM placement patch](patches/quickjs-iram.patch) remains. The local PocketJS branch adapts the new external
 ArrayBuffer API and retains the older API path.
 `POCKETJS_QJS_IRAM=0` builds a flash-execution control for comparison.
 

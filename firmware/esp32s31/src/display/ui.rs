@@ -1,7 +1,9 @@
 use super::Snapshot;
 use crate::board::Panel;
 use core::fmt::Write;
-use embassy_time::{Instant, Timer};
+use embassy_time::Instant;
+#[cfg(feature = "frame-benchmark")]
+use embassy_time::Timer;
 use embedded_graphics::{
     prelude::{Point, Size},
     primitives::Rectangle,
@@ -289,11 +291,11 @@ impl Ui {
             core::future::pending::<()>().await;
         }
         if let Some(deadline) = self.defer_until {
-            Timer::at(deadline).await;
+            pocket_embassy::runner::wait_until(deadline.as_micros()).await;
         } else if !self.rendered || self.retry {
             embassy_futures::yield_now().await;
         } else if let Some(deadline) = self.scene.next_frame_us() {
-            Timer::at(Instant::from_micros(deadline)).await;
+            pocket_embassy::runner::wait_until(deadline).await;
         } else {
             core::future::pending::<()>().await;
         }
